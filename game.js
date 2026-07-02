@@ -247,7 +247,10 @@
 
   function ensureDailyVisitor() {
     const today = getDayKey(Date.now());
-    if (state.dailyVisitor && state.dailyVisitor.date === today) return;
+    if (state.dailyVisitor && state.dailyVisitor.date === today) {
+      state.dailyVisitor.bonus = 1.5;
+      return;
+    }
 
     const availableCrops = Object.keys(CROP_DEFS).filter((cropId) => {
       const crop = CROP_DEFS[cropId];
@@ -260,7 +263,7 @@
       date: today,
       name: visitorName,
       cropType,
-      bonus: 2,
+      bonus: 1.5,
       done: false,
     };
   }
@@ -1023,7 +1026,7 @@
   }
 
   function findInventoryCropKey(cropType) {
-    const priority = ["gold", "silver", "normal", "wilted"];
+    const priority = ["wilted", "normal", "silver", "gold"];
     for (const quality of priority) {
       const key = makeItemKey("crop", cropType, quality);
       if ((state.inventory[key] || 0) > 0) return key;
