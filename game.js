@@ -201,9 +201,11 @@
 
   function sanitizeCrop(crop) {
     if (!crop || !CROP_DEFS[crop.type]) return null;
+    const now = Date.now();
+    const plantedAt = typeof crop.plantedAt === "number" ? crop.plantedAt : now;
     return {
       type: crop.type,
-      plantedAt: typeof crop.plantedAt === "number" ? crop.plantedAt : Date.now(),
+      plantedAt: Math.min(plantedAt, now),
       boostMs: typeof crop.boostMs === "number" ? crop.boostMs : 0,
       watered: Boolean(crop.watered),
     };
