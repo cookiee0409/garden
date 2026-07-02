@@ -248,8 +248,9 @@
   function ensureDailyVisitor() {
     const today = getDayKey(Date.now());
     if (state.dailyVisitor && state.dailyVisitor.date === today) {
+      if (state.dailyVisitor.bonus === 1.5) return false;
       state.dailyVisitor.bonus = 1.5;
-      return;
+      return true;
     }
 
     const availableCrops = Object.keys(CROP_DEFS).filter((cropId) => {
@@ -266,6 +267,7 @@
       bonus: 1.5,
       done: false,
     };
+    return true;
   }
 
   function applyGatherRefill(now) {
@@ -580,7 +582,7 @@
   function render() {
     const now = Date.now();
     if (applyGatherRefill(now)) saveState();
-    ensureDailyVisitor();
+    if (ensureDailyVisitor()) saveState();
 
     renderResources();
     renderScene();
