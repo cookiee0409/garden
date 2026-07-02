@@ -97,8 +97,10 @@
 
   function boot() {
     const messages = [];
+    const now = Date.now();
+    applyOfflineGrowthCap(now);
     messages.push(...applyDailyLogin());
-    if (applyGatherRefill(Date.now())) {
+    if (applyGatherRefill(now)) {
       messages.push("숲 입구 채집 기회가 다시 채워졌습니다.");
     }
     ensureDailyVisitor();
@@ -106,6 +108,18 @@
     render();
     renderTimer = window.setInterval(render, 1000);
     messages.forEach((message) => showToast(message));
+  }
+
+  function applyOfflineGrowthCap(now) {
+    const lastSeenAt = typeof state.lastSeenAt === "number" ? state.lastSeenAt : now;
+    const offlineElapsed = Math.max(0, now - lastSeenAt);
+    const cappedOutMs = Math.max(0, offlineElapsed - OFFLINE_GROWTH_CAP_MS);
+    if (cappedOutMs <= 0) return false;
+
+    state.plots.forEach((plot) => {
+      if (plot.crop) plot.crop.plantedAt += cappedOutMs;
+    });
+    return true;
   }
 
   function initializeState() {
@@ -918,7 +932,7 @@
     const crop = plot.crop;
     const def = CROP_DEFS[crop.type];
     const boostedElapsed = now - crop.plantedAt + (crop.boostMs || 0);
-    const elapsed = Math.max(0, Math.min(boostedElapsed, OFFLINE_GROWTH_CAP_MS));
+    const elapsed = Math.max(0, boostedElapsed);
     const progress = clamp(elapsed / def.growMs, 0, 1);
     const remaining = Math.max(0, def.growMs - elapsed);
     const matureAt = crop.plantedAt + Math.max(0, def.growMs - (crop.boostMs || 0));
