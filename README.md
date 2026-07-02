@@ -31,4 +31,11 @@
 - 시듦: 완성 후 45분
 - 오프라인 성장 계산 상한: 12시간
 
-실서비스 리듬으로 바꾸려면 `game.js` 상단의 `CROP_DEFS`, `GATHER_REFILL_MS`, `WILT_AFTER_MS` 값을 조정하면 됩니다.
+실서비스 리듬으로 바꾸려면 `data.js`의 `CROP_DEFS`, `GATHER_REFILL_MS`, `WILT_AFTER_MS` 값을 조정하면 됩니다.
+
+## 파일 구조
+
+- `data.js` — 밸런스 데이터(작물, 채집물, 품질, 보상). DOM 참조 없음
+- `logic.js` — 게임 규칙(성장 계산, 리필, 출석, 손님, 도감). DOM 참조 없음, Node에서 단독 require 가능
+- `game.js` — UI(렌더링, 클릭 처리, localStorage 저장)
+- `index.html` / `styles.css` — 마크업과 스타일

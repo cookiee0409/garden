@@ -1,93 +1,34 @@
 (() => {
-  const SAVE_KEY = "mini-idle-garden-save-v1";
-  const OFFLINE_GROWTH_CAP_MS = 12 * 60 * 60 * 1000;
-  const WILT_AFTER_MS = 45 * 60 * 1000;
-  const GATHER_REFILL_MS = 5 * 60 * 1000;
+  const {
+    SAVE_KEY,
+    CROP_DEFS,
+    QUALITY_DEFS,
+    FORAGE_DEFS,
+    PLOT_UNLOCK_COSTS,
+    FORAGE_POSITIONS,
+    CODEX_REWARDS,
+  } = window.GardenData;
 
-  const CROP_DEFS = {
-    tomato: {
-      id: "tomato",
-      name: "방울토마토",
-      seedCost: 10,
-      sellPrice: 25,
-      growMs: 45 * 1000,
-      className: "tomato",
-      tier: 1,
-      note: "가볍게 돌리는 첫 작물",
-    },
-    carrot: {
-      id: "carrot",
-      name: "당근",
-      seedCost: 14,
-      sellPrice: 34,
-      growMs: 75 * 1000,
-      className: "carrot",
-      tier: 1,
-      note: "초반 골드 벌이용",
-    },
-    strawberry: {
-      id: "strawberry",
-      name: "딸기",
-      seedCost: 50,
-      sellPrice: 140,
-      growMs: 4 * 60 * 1000,
-      className: "strawberry",
-      tier: 2,
-      note: "하루 두 번 접속 리듬의 중심",
-    },
-    sunflower: {
-      id: "sunflower",
-      name: "해바라기",
-      seedCost: 70,
-      sellPrice: 190,
-      growMs: 6 * 60 * 1000,
-      className: "sunflower",
-      tier: 2,
-      note: "조금 더 긴 호흡의 수익 작물",
-    },
-    watermelon: {
-      id: "watermelon",
-      name: "수박",
-      seedCost: 200,
-      sellPrice: 600,
-      growMs: 10 * 60 * 1000,
-      className: "watermelon",
-      tier: 3,
-      unlockCodex: 6,
-      note: "도감 6칸 달성 후 판매",
-    },
-  };
-
-  const QUALITY_DEFS = {
-    normal: { id: "normal", name: "일반", multiplier: 1, className: "quality-normal" },
-    silver: { id: "silver", name: "은빛", multiplier: 1.55, className: "quality-silver" },
-    gold: { id: "gold", name: "황금", multiplier: 2.8, className: "quality-gold" },
-    wilted: { id: "wilted", name: "시든", multiplier: 0.6, className: "quality-wilted" },
-  };
-
-  const FORAGE_DEFS = {
-    mushroom: { id: "mushroom", name: "작은 버섯", sellPrice: 18, symbol: "버", weight: 32 },
-    berry: { id: "berry", name: "숲 열매", sellPrice: 22, symbol: "열", weight: 28 },
-    wildflower: { id: "wildflower", name: "들꽃", sellPrice: 16, symbol: "꽃", weight: 28 },
-    clover: { id: "clover", name: "네잎클로버", sellPrice: 45, symbol: "클", weight: 8 },
-    firefly: { id: "firefly", name: "밤빛 조각", sellPrice: 64, symbol: "밤", weight: 4, nightOnly: true },
-  };
-
-  const PLOT_UNLOCK_COSTS = [0, 0, 0, 0, 120, 170, 240, 330, 460];
-  const VISITORS = ["루나", "솔", "마루", "노아", "아라"];
-  const FORAGE_POSITIONS = [
-    { x: 19, y: 22 },
-    { x: 42, y: 18 },
-    { x: 66, y: 26 },
-    { x: 27, y: 54 },
-    { x: 54, y: 58 },
-    { x: 75, y: 51 },
-  ];
-  const CODEX_REWARDS = [
-    { id: "3", required: 3, title: "새싹 연구 보상", description: "방울토마토 씨앗 2개와 딸기 씨앗 1개" },
-    { id: "6", required: 6, title: "정원 기록 보상", description: "골드 140과 황금 물뿌리개 1회" },
-    { id: "10", required: 10, title: "수집가 보상", description: "수박 씨앗 1개와 골드 220" },
-  ];
+  const {
+    createDefaultState,
+    mergeSavedState,
+    applyOfflineGrowthCap,
+    applyDailyLogin,
+    ensureDailyVisitor,
+    applyGatherRefill,
+    getCropStatus,
+    rollQuality,
+    makeGatherSpots,
+    addInventory,
+    addCodex,
+    getItemInfo,
+    makeItemKey,
+    findInventoryCropKey,
+    getPossibleCodexEntries,
+    getCodexCount,
+    getGatherRemainingMs,
+    formatDuration,
+  } = window.GardenLogic;
 
   let state = initializeState();
   let renderTimer = null;
@@ -98,117 +39,20 @@
   function boot() {
     const messages = [];
     const now = Date.now();
-    applyOfflineGrowthCap(now);
-    messages.push(...applyDailyLogin());
-    if (applyGatherRefill(now)) {
+    applyOfflineGrowthCap(state, now);
+    messages.push(...applyDailyLogin(state, now));
+    if (applyGatherRefill(state, now)) {
       messages.push("숲 입구 채집 기회가 다시 채워졌습니다.");
     }
-    ensureDailyVisitor();
+    ensureDailyVisitor(state, now);
     saveState();
     render();
     renderTimer = window.setInterval(render, 1000);
     messages.forEach((message) => showToast(message));
   }
 
-  function applyOfflineGrowthCap(now) {
-    const lastSeenAt = typeof state.lastSeenAt === "number" ? state.lastSeenAt : now;
-    const offlineElapsed = Math.max(0, now - lastSeenAt);
-    const cappedOutMs = Math.max(0, offlineElapsed - OFFLINE_GROWTH_CAP_MS);
-    if (cappedOutMs <= 0) return false;
-
-    state.plots.forEach((plot) => {
-      if (plot.crop) plot.crop.plantedAt += cappedOutMs;
-    });
-    return true;
-  }
-
   function initializeState() {
-    const saved = readSave();
-    const base = createDefaultState();
-    if (!saved) return base;
-
-    const merged = {
-      ...base,
-      ...saved,
-      seeds: { ...base.seeds, ...(saved.seeds || {}) },
-      inventory: { ...(saved.inventory || {}) },
-      codex: { ...(saved.codex || {}) },
-      claimedRewards: Array.isArray(saved.claimedRewards) ? saved.claimedRewards : [],
-      plots: base.plots.map((plot, index) => ({
-        ...plot,
-        ...((saved.plots || [])[index] || {}),
-      })),
-      gather: {
-        ...base.gather,
-        ...(saved.gather || {}),
-      },
-    };
-
-    merged.plots = merged.plots.map((plot, index) => ({
-      id: index,
-      unlocked: Boolean(plot.unlocked),
-      crop: sanitizeCrop(plot.crop),
-    }));
-
-    if (!CROP_DEFS[merged.selectedSeed]) merged.selectedSeed = "tomato";
-    if (!["garden", "forest"].includes(merged.scene)) merged.scene = "garden";
-    if (!Array.isArray(merged.gather.spots)) merged.gather.spots = makeGatherSpots(Date.now());
-    if (typeof merged.gather.charges !== "number") merged.gather.charges = 0;
-    if (typeof merged.gather.lastRefillAt !== "number") merged.gather.lastRefillAt = Date.now();
-    if (typeof merged.gold !== "number") merged.gold = base.gold;
-    if (typeof merged.goldenWater !== "number") merged.goldenWater = 0;
-    if (typeof merged.streak !== "number") merged.streak = 0;
-
-    return merged;
-  }
-
-  function createDefaultState() {
-    const now = Date.now();
-    return {
-      version: 1,
-      gold: 120,
-      selectedSeed: "tomato",
-      selectedPlot: null,
-      scene: "garden",
-      seeds: {
-        tomato: 4,
-        carrot: 2,
-        strawberry: 0,
-        sunflower: 0,
-        watermelon: 0,
-      },
-      plots: Array.from({ length: 9 }, (_, index) => ({
-        id: index,
-        unlocked: index < 4,
-        crop: null,
-      })),
-      inventory: {},
-      codex: {},
-      claimedRewards: [],
-      streak: 0,
-      lastLoginDate: null,
-      goldenWater: 0,
-      gather: {
-        lastRefillAt: now,
-        charges: 0,
-        spots: makeGatherSpots(now),
-      },
-      dailyVisitor: null,
-      createdAt: now,
-      lastSeenAt: now,
-    };
-  }
-
-  function sanitizeCrop(crop) {
-    if (!crop || !CROP_DEFS[crop.type]) return null;
-    const now = Date.now();
-    const plantedAt = typeof crop.plantedAt === "number" ? crop.plantedAt : now;
-    return {
-      type: crop.type,
-      plantedAt: Math.min(plantedAt, now),
-      boostMs: typeof crop.boostMs === "number" ? crop.boostMs : 0,
-      watered: Boolean(crop.watered),
-    };
+    return mergeSavedState(readSave(), Date.now());
   }
 
   function readSave() {
@@ -228,69 +72,6 @@
     } catch (error) {
       console.warn("Save data could not be written.", error);
     }
-  }
-
-  function applyDailyLogin() {
-    const today = getDayKey(Date.now());
-    if (state.lastLoginDate === today) return [];
-
-    const previous = state.lastLoginDate;
-    const wasYesterday = previous && getDayIndex(today) - getDayIndex(previous) === 1;
-    state.streak = wasYesterday ? state.streak + 1 : 1;
-    state.lastLoginDate = today;
-    state.goldenWater = Math.min(3, state.goldenWater + 1);
-
-    return [
-      `오늘의 첫 접속 보상으로 황금 물뿌리개 1회를 받았습니다. 연속 출석 ${state.streak}일째입니다.`,
-    ];
-  }
-
-  function ensureDailyVisitor() {
-    const today = getDayKey(Date.now());
-    if (state.dailyVisitor && state.dailyVisitor.date === today) {
-      if (state.dailyVisitor.bonus === 1.5) return false;
-      state.dailyVisitor.bonus = 1.5;
-      return true;
-    }
-
-    const availableCrops = Object.keys(CROP_DEFS).filter((cropId) => {
-      const crop = CROP_DEFS[cropId];
-      return !crop.unlockCodex || getCodexCount() >= crop.unlockCodex;
-    });
-    const cropType = availableCrops[hashString(today) % availableCrops.length];
-    const visitorName = VISITORS[hashString(`${today}:visitor`) % VISITORS.length];
-
-    state.dailyVisitor = {
-      date: today,
-      name: visitorName,
-      cropType,
-      bonus: 1.5,
-      done: false,
-    };
-    return true;
-  }
-
-  function applyGatherRefill(now) {
-    let changed = false;
-    if (!state.gather) {
-      state.gather = { lastRefillAt: now, charges: 0, spots: makeGatherSpots(now) };
-      return true;
-    }
-
-    if (state.gather.lastRefillAt > now) {
-      state.gather.lastRefillAt = now;
-      changed = true;
-    }
-
-    const elapsed = now - state.gather.lastRefillAt;
-    const refillCount = Math.floor(elapsed / GATHER_REFILL_MS);
-    if (refillCount > 0) {
-      state.gather.charges = Math.min(2, state.gather.charges + refillCount);
-      state.gather.lastRefillAt += refillCount * GATHER_REFILL_MS;
-      changed = true;
-    }
-
-    return changed;
   }
 
   function handleClick(event) {
@@ -332,7 +113,7 @@
   function buySeed(cropId) {
     const crop = CROP_DEFS[cropId];
     if (!crop) return;
-    if (crop.unlockCodex && getCodexCount() < crop.unlockCodex) {
+    if (crop.unlockCodex && getCodexCount(state) < crop.unlockCodex) {
       showToast(`도감 ${crop.unlockCodex}칸을 채우면 ${crop.name} 씨앗이 열립니다.`);
       return;
     }
@@ -455,8 +236,8 @@
 
     const quality = status.wilted ? "wilted" : rollQuality(Boolean(plot.crop.watered));
     const key = makeItemKey("crop", plot.crop.type, quality);
-    addInventory(key, 1);
-    addCodex(key);
+    addInventory(state, key, 1);
+    addCodex(state, key);
     plot.crop = null;
     state.selectedPlot = index;
 
@@ -498,7 +279,7 @@
     const visitor = state.dailyVisitor;
     if (!visitor || visitor.done) return;
 
-    const key = findInventoryCropKey(visitor.cropType);
+    const key = findInventoryCropKey(state, visitor.cropType);
     if (!key) {
       showToast(`${CROP_DEFS[visitor.cropType].name} 수확물이 필요합니다.`);
       return;
@@ -521,8 +302,8 @@
 
     spot.collected = true;
     const key = makeItemKey("forage", spot.item, "normal");
-    addInventory(key, 1);
-    addCodex(key);
+    addInventory(state, key, 1);
+    addCodex(state, key);
     showToast(`${FORAGE_DEFS[spot.item].name}을 주웠습니다.`);
     saveState();
     render();
@@ -530,7 +311,7 @@
 
   function startGatherRound() {
     if (state.gather.charges <= 0) {
-      showToast(`다음 채집 리필까지 ${formatDuration(getGatherRemainingMs(Date.now()))} 남았습니다.`);
+      showToast(`다음 채집 리필까지 ${formatDuration(getGatherRemainingMs(state, Date.now()))} 남았습니다.`);
       return;
     }
 
@@ -543,7 +324,7 @@
 
   function claimReward(rewardId) {
     const reward = CODEX_REWARDS.find((item) => item.id === rewardId);
-    if (!reward || state.claimedRewards.includes(rewardId) || getCodexCount() < reward.required) return;
+    if (!reward || state.claimedRewards.includes(rewardId) || getCodexCount(state) < reward.required) return;
 
     if (rewardId === "3") {
       state.seeds.tomato += 2;
@@ -581,8 +362,8 @@
 
   function render() {
     const now = Date.now();
-    if (applyGatherRefill(now)) saveState();
-    if (ensureDailyVisitor()) saveState();
+    if (applyGatherRefill(state, now)) saveState();
+    if (ensureDailyVisitor(state, now)) saveState();
 
     renderResources();
     renderScene();
@@ -718,7 +499,7 @@
       panel.innerHTML = `
         <p class="detail-copy">
           채집 포인트는 데모에서 5분마다 리필되고 최대 2회까지 보관됩니다.
-          현재 예비 리필은 ${state.gather.charges}회, 다음 리필까지 ${formatDuration(getGatherRemainingMs(now))}입니다.
+          현재 예비 리필은 ${state.gather.charges}회, 다음 리필까지 ${formatDuration(getGatherRemainingMs(state, now))}입니다.
         </p>
         <button class="primary-button secondary" type="button" data-action="start-gather-round" ${!allCollected || state.gather.charges <= 0 ? "disabled" : ""}>
           새 포인트 펼치기
@@ -813,7 +594,7 @@
       ? `
         <div class="forest-empty">
           <h3>채집 완료</h3>
-          <p class="empty-state">예비 리필 ${state.gather.charges}회 · 다음 리필 ${formatDuration(getGatherRemainingMs(Date.now()))}</p>
+          <p class="empty-state">예비 리필 ${state.gather.charges}회 · 다음 리필 ${formatDuration(getGatherRemainingMs(state, Date.now()))}</p>
           <button class="primary-button secondary" type="button" data-action="start-gather-round" ${state.gather.charges <= 0 ? "disabled" : ""}>
             새 포인트 펼치기
           </button>
@@ -829,7 +610,7 @@
     if (!visitor) return;
 
     const crop = CROP_DEFS[visitor.cropType];
-    const hasCrop = Boolean(findInventoryCropKey(visitor.cropType));
+    const hasCrop = Boolean(findInventoryCropKey(state, visitor.cropType));
     $("visitor-badge").textContent = visitor.done ? "완료" : `x${visitor.bonus}`;
     $("daily-visitor").innerHTML = `
       <div class="visitor-card">
@@ -846,7 +627,7 @@
   }
 
   function renderShop() {
-    const count = getCodexCount();
+    const count = getCodexCount(state);
     $("shop-list").innerHTML = Object.values(CROP_DEFS)
       .map((crop) => {
         const locked = crop.unlockCodex && count < crop.unlockCodex;
@@ -897,7 +678,7 @@
 
   function renderCodex() {
     const possible = getPossibleCodexEntries();
-    const count = getCodexCount();
+    const count = getCodexCount(state);
     $("codex-count").textContent = `${count}/${possible.length}`;
 
     const tiles = possible
@@ -935,174 +716,8 @@
     `;
   }
 
-  function getCropStatus(plot, now) {
-    const crop = plot.crop;
-    const def = CROP_DEFS[crop.type];
-    const boostedElapsed = now - crop.plantedAt + (crop.boostMs || 0);
-    const elapsed = Math.max(0, boostedElapsed);
-    const progress = clamp(elapsed / def.growMs, 0, 1);
-    const remaining = Math.max(0, def.growMs - elapsed);
-    const matureAt = crop.plantedAt + Math.max(0, def.growMs - (crop.boostMs || 0));
-    const wilted = progress >= 1 && now - matureAt > WILT_AFTER_MS;
-    const stage = progress >= 1 ? "ready" : progress >= 0.45 ? "middle" : "sprout";
-    return { def, elapsed, progress, remaining, matureAt, wilted, stage, isReady: progress >= 1 };
-  }
-
-  function rollQuality(hasWaterBonus) {
-    const goldChance = hasWaterBonus ? 0.18 : 0.08;
-    const silverChance = hasWaterBonus ? 0.34 : 0.22;
-    const roll = Math.random();
-    if (roll < goldChance) return "gold";
-    if (roll < goldChance + silverChance) return "silver";
-    return "normal";
-  }
-
-  function makeGatherSpots(now) {
-    return FORAGE_POSITIONS.map((_, index) => ({
-      id: `${now}-${index}`,
-      item: pickForageItem(),
-      collected: false,
-    }));
-  }
-
-  function pickForageItem() {
-    const night = isNightTime();
-    const pool = Object.values(FORAGE_DEFS).filter((item) => !item.nightOnly || night);
-    const total = pool.reduce((sum, item) => sum + item.weight, 0);
-    let roll = Math.random() * total;
-
-    for (const item of pool) {
-      roll -= item.weight;
-      if (roll <= 0) return item.id;
-    }
-    return pool[0].id;
-  }
-
-  function isNightTime() {
-    const hour = new Date().getHours();
-    return hour >= 19 || hour < 5;
-  }
-
-  function addInventory(key, amount) {
-    state.inventory[key] = (state.inventory[key] || 0) + amount;
-  }
-
-  function addCodex(key) {
-    if (state.codex[key]) return;
-    state.codex[key] = { firstObtainedAt: Date.now() };
-  }
-
-  function getItemInfo(key) {
-    const { kind, id, quality } = parseItemKey(key);
-    if (kind === "crop") {
-      const crop = CROP_DEFS[id];
-      const qualityDef = QUALITY_DEFS[quality] || QUALITY_DEFS.normal;
-      return {
-        kind,
-        id,
-        quality,
-        name: `${crop.name} (${qualityDef.name})`,
-        sellPrice: Math.round(crop.sellPrice * qualityDef.multiplier),
-        qualityClass: qualityDef.className,
-      };
-    }
-
-    const forage = FORAGE_DEFS[id];
-    return {
-      kind,
-      id,
-      quality,
-      name: forage.name,
-      sellPrice: forage.sellPrice,
-      qualityClass: "quality-normal",
-    };
-  }
-
-  function makeItemKey(kind, id, quality) {
-    return `${kind}|${id}|${quality}`;
-  }
-
-  function parseItemKey(key) {
-    const [kind, id, quality] = key.split("|");
-    return { kind, id, quality };
-  }
-
-  function findInventoryCropKey(cropType) {
-    const priority = ["wilted", "normal", "silver", "gold"];
-    for (const quality of priority) {
-      const key = makeItemKey("crop", cropType, quality);
-      if ((state.inventory[key] || 0) > 0) return key;
-    }
-    return null;
-  }
-
-  function getPossibleCodexEntries() {
-    const cropEntries = Object.values(CROP_DEFS).flatMap((crop) =>
-      ["normal", "silver", "gold"].map((quality) => ({
-        key: makeItemKey("crop", crop.id, quality),
-        label: `${crop.name} ${QUALITY_DEFS[quality].name}`,
-      })),
-    );
-
-    const forageEntries = Object.values(FORAGE_DEFS).map((item) => ({
-      key: makeItemKey("forage", item.id, "normal"),
-      label: item.name,
-    }));
-
-    return [...cropEntries, ...forageEntries];
-  }
-
-  function getCodexCount() {
-    return getPossibleCodexEntries().filter((entry) => Boolean(state.codex[entry.key])).length;
-  }
-
-  function getGatherRemainingMs(now) {
-    if (state.gather.charges >= 2) return 0;
-    const elapsed = now - state.gather.lastRefillAt;
-    return Math.max(0, GATHER_REFILL_MS - (elapsed % GATHER_REFILL_MS));
-  }
-
-  function getDayKey(timestamp) {
-    const date = new Date(timestamp);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
-  function getDayIndex(key) {
-    return Math.floor(new Date(`${key}T00:00:00`).getTime() / 86400000);
-  }
-
-  function hashString(value) {
-    let hash = 0;
-    for (let index = 0; index < value.length; index += 1) {
-      hash = (hash << 5) - hash + value.charCodeAt(index);
-      hash |= 0;
-    }
-    return Math.abs(hash);
-  }
-
-  function formatDuration(ms) {
-    if (ms <= 0) return "완료";
-    const totalSeconds = Math.ceil(ms / 1000);
-    if (totalSeconds < 60) return `${totalSeconds}초`;
-
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    if (minutes < 60) return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
-
-    const hours = Math.floor(minutes / 60);
-    const restMinutes = minutes % 60;
-    return restMinutes > 0 ? `${hours}시간 ${restMinutes}분` : `${hours}시간`;
-  }
-
   function resourcePill(label, value) {
     return `<span class="resource-pill"><span>${label}</span><strong>${value}</strong></span>`;
-  }
-
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
   }
 
   function showToast(message) {
