@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>미니 방치형 정원</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="game.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Idle Garden MVP</p>
+          <h1>미니 정원</h1>
+        </div>
+        <div id="resource-strip" class="resource-strip" aria-live="polite"></div>
+        <button class="ghost-button danger" type="button" data-action="reset-game">
+          초기화
+        </button>
+      </header>
+
+      <section class="game-layout" aria-label="정원 게임">
+        <section class="play-area">
+          <div class="scene-toolbar" role="tablist" aria-label="장소 선택">
+            <button class="tab-button active" type="button" data-action="switch-scene" data-scene="garden">
+              정원
+            </button>
+            <button class="tab-button" type="button" data-action="switch-scene" data-scene="forest">
+              숲 입구
+            </button>
+          </div>
+
+          <div id="scene" class="scene scene--garden">
+            <div class="sun"></div>
+            <div class="cloud cloud--one"></div>
+            <div class="cloud cloud--two"></div>
+            <div class="tree tree--left">
+              <span></span>
+            </div>
+            <div class="tree tree--right">
+              <span></span>
+            </div>
+            <div class="garden-island">
+              <div id="plot-grid" class="plot-grid" aria-label="밭"></div>
+              <div id="forest-layer" class="forest-layer" aria-label="채집 포인트"></div>
+            </div>
+          </div>
+
+          <div id="seed-bar" class="seed-bar" aria-label="씨앗 선택"></div>
+          <div id="plot-details" class="plot-details" aria-live="polite"></div>
+        </section>
+
+        <aside class="side-panels">
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>오늘의 손님</h2>
+              <span id="visitor-badge" class="soft-badge"></span>
+            </div>
+            <div id="daily-visitor"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>씨앗 상점</h2>
+              <span class="soft-badge">데모 밸런스</span>
+            </div>
+            <div id="shop-list" class="stack-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>인벤토리</h2>
+              <button class="mini-button" type="button" data-action="sell-all">
+                모두 판매
+              </button>
+            </div>
+            <div id="inventory-list" class="stack-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>도감</h2>
+              <span id="codex-count" class="soft-badge"></span>
+            </div>
+            <div id="codex-panel"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <div id="toast-stack" class="toast-stack" aria-live="assertive"></div>
+  </body>
+</html>
