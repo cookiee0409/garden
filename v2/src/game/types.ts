@@ -1,0 +1,116 @@
+export type QualityId = "normal" | "silver" | "gold" | "wilted";
+export type SceneId = "garden" | "forest";
+export type GrowthStage = "sprout" | "middle" | "ready";
+
+export interface CropDef {
+  id: string;
+  name: string;
+  seedCost: number;
+  sellPrice: number;
+  growMs: number;
+  className: string;
+  tier: number;
+  unlockCodex?: number;
+  note: string;
+}
+
+export interface QualityDef {
+  id: QualityId;
+  name: string;
+  multiplier: number;
+  className: string;
+}
+
+export interface ForageDef {
+  id: string;
+  name: string;
+  sellPrice: number;
+  symbol: string;
+  weight: number;
+  nightOnly?: boolean;
+}
+
+export interface CodexReward {
+  id: string;
+  required: number;
+  title: string;
+  description: string;
+}
+
+export interface CropState {
+  type: string;
+  plantedAt: number;
+  boostMs: number;
+  watered: boolean;
+}
+
+export interface PlotState {
+  id: number;
+  unlocked: boolean;
+  crop: CropState | null;
+}
+
+export interface GatherSpot {
+  id: string;
+  item: string;
+  collected: boolean;
+}
+
+export interface GatherState {
+  lastRefillAt: number;
+  charges: number;
+  spots: GatherSpot[];
+}
+
+export interface DailyVisitor {
+  date: string;
+  name: string;
+  cropType: string;
+  bonus: number;
+  done: boolean;
+}
+
+export interface GameState {
+  version: number;
+  gold: number;
+  selectedSeed: string;
+  selectedPlot: number | null;
+  scene: SceneId;
+  seeds: Record<string, number>;
+  plots: PlotState[];
+  inventory: Record<string, number>;
+  codex: Record<string, { firstObtainedAt: number }>;
+  claimedRewards: string[];
+  streak: number;
+  lastLoginDate: string | null;
+  goldenWater: number;
+  gather: GatherState;
+  dailyVisitor: DailyVisitor | null;
+  createdAt: number;
+  lastSeenAt: number;
+}
+
+export interface CropStatus {
+  def: CropDef;
+  elapsed: number;
+  progress: number;
+  remaining: number;
+  matureAt: number;
+  wilted: boolean;
+  stage: GrowthStage;
+  isReady: boolean;
+}
+
+export interface ItemInfo {
+  kind: string;
+  id: string;
+  quality: string;
+  name: string;
+  sellPrice: number;
+  qualityClass: string;
+}
+
+export interface CodexEntry {
+  key: string;
+  label: string;
+}

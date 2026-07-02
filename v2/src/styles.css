@@ -1,0 +1,66 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: #25312f;
+  background: linear-gradient(180deg, #e7f6ff 0%, #edf9ea 54%, #f8fbf6 100%);
+  font-family: Inter, "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+}
+
+.app-shell {
+  width: min(1080px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 34px;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
+}
+
+.resource-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid rgba(55, 78, 71, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.scene-frame {
+  height: min(62vh, 560px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(227, 247, 255, 0.92) 0%, rgba(226, 246, 219, 0.92) 62%, rgba(188, 222, 160, 0.9) 100%);
+  box-shadow: 0 18px 45px rgba(38, 65, 55, 0.18);
+}
+
+.hint {
+  margin-top: 14px;
+  color: #687872;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}

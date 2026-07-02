@@ -6,6 +6,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "http-server", "-p", "8317", "-c-1"],
       "port": 8317
+    },
+    {
+      "name": "garden-v2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "v2", "run", "dev", "--", "--port", "5199", "--strictPort"],
+      "port": 5199
     }
   ]
 }
