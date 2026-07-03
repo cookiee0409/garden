@@ -6,6 +6,7 @@ type Migration = (saved: SavedShape) => SavedShape;
 
 const migrations: Record<number, Migration> = {
   1: migrateV1ToV2,
+  2: migrateV2ToV3,
 };
 
 export function migrate(saved: Partial<GameState> | null): Partial<GameState> | null {
@@ -49,5 +50,20 @@ function migrateV1ToV2(saved: SavedShape): SavedShape {
     balanceId: typeof saved.balanceId === "string" ? saved.balanceId : BALANCE_ID,
     fertilizer: typeof saved.fertilizer === "number" ? saved.fertilizer : 0,
     plots,
+  };
+}
+
+function migrateV2ToV3(saved: SavedShape): SavedShape {
+  return {
+    ...saved,
+    version: 3,
+    lastRainWateredDate: typeof saved.lastRainWateredDate === "string" ? saved.lastRainWateredDate : null,
+    decorations: Array.isArray(saved.decorations) ? saved.decorations : [],
+    compost:
+      saved.compost && typeof saved.compost === "object"
+        ? saved.compost
+        : {
+            slots: [null, null],
+          },
   };
 }

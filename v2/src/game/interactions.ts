@@ -1,10 +1,13 @@
-import { CROP_DEFS, FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "./data";
-import { formatDuration, getCropStatus } from "./logic";
+import { CRITTER_DEFS, CROP_DEFS, FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "./data";
+import { findWiltedInventoryKey, formatDuration, getCompostRemainingMs, getCropStatus, hasEmptyCompostSlot } from "./logic";
 import type { GameState, InteractionPrompt, InteractionTarget } from "./types";
 
 export function getTargetKey(target: InteractionTarget): string {
   if (target.kind === "plot") return `plot:${target.index}`;
   if (target.kind === "forage") return `forage:${target.index}`;
+  if (target.kind === "decoration") return `decoration:${target.id}`;
+  if (target.kind === "compost") return "compost";
+  if (target.kind === "critter") return `critter:${target.id}`;
   return `portal:${target.id}`;
 }
 
@@ -31,6 +34,35 @@ export function getInteractionPrompt(game: GameState, target: InteractionTarget,
       targetKey: getTargetKey(target),
       action: "collect",
       label: `${FORAGE_DEFS[spot.item].name} 채집`,
+    };
+  }
+
+  if (target.kind === "decoration") {
+    return {
+      target,
+      targetKey: getTargetKey(target),
+      action: "pickup",
+      label: "장식 회수",
+    };
+  }
+
+  if (target.kind === "compost") {
+    const readySlot = game.compost.slots.find((slot) => slot && getCompostRemainingMs(slot, now) <= 0);
+    const canAdd = hasEmptyCompostSlot(game) && Boolean(findWiltedInventoryKey(game));
+    return {
+      target,
+      targetKey: getTargetKey(target),
+      action: "compost",
+      label: readySlot ? "퇴비 수거" : canAdd ? "시든 작물 넣기" : "퇴비함 확인",
+    };
+  }
+
+  if (target.kind === "critter") {
+    return {
+      target,
+      targetKey: getTargetKey(target),
+      action: "observe",
+      label: `${CRITTER_DEFS[target.type].name} 관찰`,
     };
   }
 
