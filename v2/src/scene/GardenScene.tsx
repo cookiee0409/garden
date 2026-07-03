@@ -1,63 +1,102 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
-import { Vector3 } from "three";
-import type { Group, Mesh } from "three";
-import { FORAGE_DEFS, FORAGE_POSITIONS, PLOT_UNLOCK_COSTS } from "../game/data";
+import { Object3D, Vector3 } from "three";
+import type { Group, InstancedMesh, Mesh, MeshBasicMaterial } from "three";
+import { DECOR_DEFS, FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "../game/data";
 import { getInteractionPrompt } from "../game/interactions";
-import { formatDuration, getCropStatus, getGatherRemainingMs, isNightTime } from "../game/logic";
+import {
+  formatDuration,
+  getCompostRemainingMs,
+  getCropStatus,
+  getGatherRemainingMs,
+  getSeason,
+  getWeather,
+  isDecorationPlaced,
+  isNightTime,
+} from "../game/logic";
 import { useGameStore } from "../game/store";
-import type { CareEffect, GameState, HarvestEffect as HarvestEffectType, InteractionPrompt, InteractionTarget, PlayerSpawnId, SceneId } from "../game/types";
+import type {
+  ActiveCritter,
+  CareEffect,
+  DecorationType,
+  GameState,
+  HarvestEffect as HarvestEffectType,
+  InteractionPrompt,
+  InteractionTarget,
+  PlacedDecoration,
+  SceneId,
+  SeasonId,
+  WeatherId,
+} from "../game/types";
 import { virtualInteraction, virtualMove } from "../input/playerInput";
+import { CritterModel } from "./CritterModel";
 import { CropModel } from "./CropModel";
+import {
+  CAMERA_OFFSET,
+  COMPOST_COLLIDER,
+  COMPOST_POSITION,
+  FOREST_ISLAND_GEOMETRY,
+  FOREST_TREES,
+  FOREST_TREE_COLLIDERS,
+  GARDEN_ISLAND_GEOMETRY,
+  GARDEN_TREES,
+  GARDEN_TREE_COLLIDERS,
+  INITIAL_CAMERA_POSITION,
+  INTERACTION_RADIUS,
+  ISLAND_RADIUS,
+  PLAYER_RADIUS,
+  PLAYER_SPEED,
+  PLOT_COUNT,
+  PLOT_HALF_SIZE,
+  PORTALS,
+  SPAWN_POSITIONS,
+  forestPosition,
+  plotPosition,
+} from "./layout";
+import type { ScenePalette } from "./palette";
+import { getScenePalette } from "./palette";
 import { PlayerModel } from "./PlayerModel";
 
-function plotPosition(index: number): [number, number] {
-  const row = Math.floor(index / 3);
-  const col = index % 3;
-  return [(col - 1) * 1.3, (row - 1) * 1.3];
+const GARDEN_INTERACTION_TARGETS: InteractionTarget[] = [
+  ...Array.from({ length: PLOT_COUNT }, (_, index) => ({ kind: "plot", index }) as InteractionTarget),
+  { kind: "compost" },
+  PORTALS.garden.target,
+];
+
+const critterPositions = new Map<string, Vector3>();
+
+const PLOT_COLLIDERS = Array.from({ length: PLOT_COUNT }, (_, index) => {
+  const [x, z] = plotPosition(index);
+  return { x, z };
+});
+
+function buildForestInteractionTargets(spots: GameState["gather"]["spots"]): InteractionTarget[] {
+  const targets: InteractionTarget[] = [];
+  spots.forEach((spot, index) => {
+    if (!spot.collected) targets.push({ kind: "forage", index });
+  });
+  targets.push(PORTALS.forest.target);
+  return targets;
 }
 
-function forestPosition(index: number): [number, number] {
-  const position = FORAGE_POSITIONS[index % FORAGE_POSITIONS.length];
-  return [(position.x / 100 - 0.5) * 5.6, (position.y / 100 - 0.5) * 4.8];
+function buildGardenInteractionTargets(game: GameState, activeCritters: ActiveCritter[]): InteractionTarget[] {
+  const targets: InteractionTarget[] = [...GARDEN_INTERACTION_TARGETS];
+  game.decorations.forEach((decoration) => {
+    if (isDecorationPlaced(decoration)) targets.push({ kind: "decoration", id: decoration.id });
+  });
+  activeCritters.forEach((critter) => {
+    const position = critterPositions.get(critter.id);
+    targets.push({
+      kind: "critter",
+      id: critter.id,
+      type: critter.type,
+      x: position?.x ?? critter.x,
+      z: position?.z ?? critter.z,
+    });
+  });
+  return targets;
 }
-
-const PLAYER_SPEED = 2.2;
-const PLAYER_RADIUS = 0.24;
-const ISLAND_RADIUS = 3.05;
-const INTERACTION_RADIUS = 0.9;
-const CAMERA_OFFSET = new Vector3(5.2, 6.2, 5.2);
-
-const SPAWN_POSITIONS: Record<PlayerSpawnId, [number, number, number]> = {
-  "garden-default": [0, 0.05, 2.12],
-  "garden-from-forest": [0, 0.05, 2.12],
-  "forest-from-garden": [0, 0.05, -2.12],
-};
-
-const PORTALS: Record<SceneId, { target: InteractionTarget; position: [number, number, number]; sign: string }> = {
-  garden: {
-    target: { kind: "portal", id: "garden-to-forest", to: "forest" },
-    position: [0, 0, 2.72],
-    sign: "숲",
-  },
-  forest: {
-    target: { kind: "portal", id: "forest-to-garden", to: "garden" },
-    position: [0, 0, -2.72],
-    sign: "정원",
-  },
-};
-
-const GARDEN_TREE_COLLIDERS = [
-  { x: -2.55, z: -1.75, radius: 0.28 },
-  { x: 2.55, z: 1.55, radius: 0.28 },
-];
-const FOREST_TREE_COLLIDERS = [
-  { x: -2.45, z: -1.65, radius: 0.3 },
-  { x: 2.38, z: -1.2, radius: 0.28 },
-  { x: -2.1, z: 1.65, radius: 0.25 },
-  { x: 2.2, z: 1.4, radius: 0.29 },
-];
 
 function isTextInputTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
@@ -107,54 +146,97 @@ function resolveCircleCollision(position: Vector3, centerX: number, centerZ: num
   position.z += dz * push;
 }
 
-function resolveCollisions(position: Vector3, scene: SceneId) {
+function resolveDecorationCollisions(position: Vector3, decorations: PlacedDecoration[]) {
+  for (const decoration of decorations) {
+    if (!isDecorationPlaced(decoration)) continue;
+    const def = DECOR_DEFS[decoration.type];
+    if (!def) continue;
+    resolveCircleCollision(position, decoration.x, decoration.z, def.colliderRadius);
+  }
+}
+
+function resolveCollisions(position: Vector3, scene: SceneId, game: GameState) {
   clampToIsland(position);
 
   if (scene === "garden") {
-    Array.from({ length: 9 }, (_, index) => plotPosition(index)).forEach(([x, z]) => {
-      resolveAabbCollision(position, x, z, 0.55, 0.55);
-    });
-    GARDEN_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+    for (const plot of PLOT_COLLIDERS) {
+      resolveAabbCollision(position, plot.x, plot.z, PLOT_HALF_SIZE, PLOT_HALF_SIZE);
+    }
+    for (const tree of GARDEN_TREE_COLLIDERS) {
+      resolveCircleCollision(position, tree.x, tree.z, tree.radius);
+    }
+    resolveCircleCollision(position, COMPOST_COLLIDER.x, COMPOST_COLLIDER.z, COMPOST_COLLIDER.radius);
+    resolveDecorationCollisions(position, game.decorations);
   } else {
-    FOREST_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+    for (const tree of FOREST_TREE_COLLIDERS) {
+      resolveCircleCollision(position, tree.x, tree.z, tree.radius);
+    }
   }
 
   clampToIsland(position);
 }
 
-function targetPosition(target: InteractionTarget): [number, number] {
+function circleOverlapsAabb(x: number, z: number, radius: number, centerX: number, centerZ: number, halfX: number, halfZ: number): boolean {
+  const closestX = Math.max(centerX - halfX, Math.min(x, centerX + halfX));
+  const closestZ = Math.max(centerZ - halfZ, Math.min(z, centerZ + halfZ));
+  return Math.hypot(x - closestX, z - closestZ) < radius;
+}
+
+function circlesOverlap(x: number, z: number, radius: number, otherX: number, otherZ: number, otherRadius: number): boolean {
+  return Math.hypot(x - otherX, z - otherZ) < radius + otherRadius;
+}
+
+function canPlaceDecoration(game: GameState, type: DecorationType, x: number, z: number, ignoreId?: string): boolean {
+  const def = DECOR_DEFS[type];
+  if (!def) return false;
+  const radius = def.colliderRadius;
+  if (Math.hypot(x, z) > ISLAND_RADIUS - radius - 0.08) return false;
+
+  for (const plot of PLOT_COLLIDERS) {
+    if (circleOverlapsAabb(x, z, radius + 0.08, plot.x, plot.z, PLOT_HALF_SIZE, PLOT_HALF_SIZE)) return false;
+  }
+  for (const tree of GARDEN_TREE_COLLIDERS) {
+    if (circlesOverlap(x, z, radius, tree.x, tree.z, tree.radius + 0.08)) return false;
+  }
+  if (circlesOverlap(x, z, radius, COMPOST_COLLIDER.x, COMPOST_COLLIDER.z, COMPOST_COLLIDER.radius + 0.12)) return false;
+  const portal = PORTALS.garden.position;
+  if (circlesOverlap(x, z, radius, portal[0], portal[2], 0.72)) return false;
+
+  for (const decoration of game.decorations) {
+    if (decoration.id === ignoreId || !isDecorationPlaced(decoration)) continue;
+    const other = DECOR_DEFS[decoration.type];
+    if (other && circlesOverlap(x, z, radius, decoration.x, decoration.z, other.colliderRadius + 0.08)) return false;
+  }
+
+  return true;
+}
+
+function targetPosition(target: InteractionTarget, game: GameState): [number, number] {
   if (target.kind === "plot") return plotPosition(target.index);
   if (target.kind === "forage") return forestPosition(target.index);
+  if (target.kind === "compost") return [COMPOST_POSITION[0], COMPOST_POSITION[2]];
+  if (target.kind === "critter") return [target.x, target.z];
+  if (target.kind === "decoration") {
+    const decoration = game.decorations.find((item) => item.id === target.id);
+    if (decoration && isDecorationPlaced(decoration)) return [decoration.x, decoration.z];
+    return [0, 0];
+  }
   const portal = target.id === "garden-to-forest" ? PORTALS.garden : PORTALS.forest;
   return [portal.position[0], portal.position[2]];
 }
 
-function nearestInteraction(game: GameState, scene: SceneId, position: Vector3, now: number): InteractionPrompt | null {
-  const targets: InteractionTarget[] =
-    scene === "garden"
-      ? [
-          ...game.plots.map((_, index) => ({ kind: "plot", index }) as InteractionTarget),
-          PORTALS.garden.target,
-        ]
-      : [
-          ...game.gather.spots.reduce<InteractionTarget[]>((items, spot, index) => {
-            if (!spot.collected) items.push({ kind: "forage", index });
-            return items;
-          }, []),
-          PORTALS.forest.target,
-        ];
-
+function nearestInteraction(game: GameState, targets: InteractionTarget[], position: Vector3, now: number): InteractionPrompt | null {
   let nearestTarget: InteractionTarget | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  targets.forEach((target) => {
-    const [x, z] = targetPosition(target);
+  for (const target of targets) {
+    const [x, z] = targetPosition(target, game);
     const distance = Math.hypot(position.x - x, position.z - z);
-    if (distance > INTERACTION_RADIUS) return;
+    if (distance > INTERACTION_RADIUS) continue;
     if (distance < nearestDistance) {
       nearestTarget = target;
       nearestDistance = distance;
     }
-  });
+  }
 
   return nearestTarget ? getInteractionPrompt(game, nearestTarget, now) : null;
 }
@@ -162,19 +244,32 @@ function nearestInteraction(game: GameState, scene: SceneId, position: Vector3, 
 function PlayerController() {
   const scene = useGameStore((store) => store.game.scene);
   const game = useGameStore((store) => store.game);
+  const activeCritters = useGameStore((store) => store.activeCritters);
+  const placementDecorationId = useGameStore((store) => store.placementDecorationId);
   const now = useGameStore((store) => store.now);
   const spawn = useGameStore((store) => store.playerSpawn);
   const setNearbyInteraction = useGameStore((store) => store.setNearbyInteraction);
   const performNearbyInteraction = useGameStore((store) => store.performNearbyInteraction);
+  const placeDecoration = useGameStore((store) => store.placeDecoration);
+  const cancelDecorationPlacement = useGameStore((store) => store.cancelDecorationPlacement);
+  const showToast = useGameStore((store) => store.showToast);
 
   const player = useRef<Group>(null);
+  const placementPreview = useRef<Group>(null);
   const keys = useRef(new Set<string>());
   const gameRef = useRef(game);
   const nowRef = useRef(now);
   const sceneRef = useRef(scene);
+  const activeCrittersRef = useRef(activeCritters);
+  const placementDecorationIdRef = useRef(placementDecorationId);
+  const placementValidRef = useRef(false);
+  const placementPointRef = useRef({ x: 0, z: 0, rotY: 0 });
   const nearbyRef = useRef<InteractionPrompt | null>(null);
   const walkingRef = useRef(false);
   const cameraTarget = useRef(new Vector3(0, 0.4, 0));
+  const cameraLookTarget = useRef(new Vector3());
+  const cameraPositionTarget = useRef(new Vector3());
+  const cameraOffset = useRef(new Vector3(...CAMERA_OFFSET));
   const nextPosition = useRef(new Vector3());
   const lastVirtualInteraction = useRef(virtualInteraction.requestId);
 
@@ -191,20 +286,54 @@ function PlayerController() {
   }, [scene]);
 
   useEffect(() => {
+    activeCrittersRef.current = activeCritters;
+  }, [activeCritters]);
+
+  useEffect(() => {
+    placementDecorationIdRef.current = placementDecorationId;
+  }, [placementDecorationId]);
+
+  useEffect(() => {
     const position = SPAWN_POSITIONS[spawn.id];
     player.current?.position.set(...position);
     cameraTarget.current.set(position[0], 0.4, position[2]);
     setNearbyInteraction(null);
   }, [setNearbyInteraction, spawn.id, spawn.version]);
 
+  const tryPlaceDecoration = () => {
+    const id = placementDecorationIdRef.current;
+    if (!id) return false;
+
+    const decoration = gameRef.current.decorations.find((item) => item.id === id);
+    if (!decoration) {
+      cancelDecorationPlacement();
+      return true;
+    }
+
+    if (!placementValidRef.current) {
+      showToast("여기에는 설치할 수 없습니다.");
+      return true;
+    }
+
+    const point = placementPointRef.current;
+    placeDecoration(id, point.x, point.z, point.rotY);
+    return true;
+  };
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTextInputTarget(event.target)) return;
+      if (event.code === "Escape" && placementDecorationIdRef.current) {
+        event.preventDefault();
+        cancelDecorationPlacement();
+        return;
+      }
       if (event.code === "KeyE" || event.code === "Space") {
         event.preventDefault();
+        if (tryPlaceDecoration()) return;
         const target = nearbyRef.current?.target;
         if (target && player.current) {
-          const [x, z] = targetPosition(target);
+          const [x, z] = targetPosition(target, gameRef.current);
           player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(x - player.current.position.x, z - player.current.position.z), 0.65);
         }
         performNearbyInteraction();
@@ -223,7 +352,7 @@ function PlayerController() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [performNearbyInteraction]);
+  }, [cancelDecorationPlacement, performNearbyInteraction, placeDecoration, showToast]);
 
   useFrame((state, delta) => {
     if (!player.current) return;
@@ -247,34 +376,183 @@ function PlayerController() {
       nextPosition.current.copy(player.current.position);
       nextPosition.current.x += x * PLAYER_SPEED * delta;
       nextPosition.current.z += z * PLAYER_SPEED * delta;
-      resolveCollisions(nextPosition.current, sceneRef.current);
+      resolveCollisions(nextPosition.current, sceneRef.current, gameRef.current);
       player.current.position.copy(nextPosition.current);
       player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(x, z), Math.min(1, delta * 12));
     }
 
+    const placementId = placementDecorationIdRef.current;
+    if (placementId && placementPreview.current) {
+      const decoration = gameRef.current.decorations.find((item) => item.id === placementId);
+      const rotY = player.current.rotation.y;
+      const frontX = player.current.position.x + Math.sin(rotY) * 0.8;
+      const frontZ = player.current.position.z + Math.cos(rotY) * 0.8;
+      placementPointRef.current = { x: frontX, z: frontZ, rotY };
+      placementValidRef.current = Boolean(decoration && canPlaceDecoration(gameRef.current, decoration.type, frontX, frontZ, decoration.id));
+      placementPreview.current.position.set(frontX, 0.08, frontZ);
+      placementPreview.current.rotation.y = rotY;
+    }
+
     if (lastVirtualInteraction.current !== virtualInteraction.requestId) {
       lastVirtualInteraction.current = virtualInteraction.requestId;
+      if (tryPlaceDecoration()) return;
       const target = nearbyRef.current?.target;
       if (target) {
-        const [targetX, targetZ] = targetPosition(target);
+        const [targetX, targetZ] = targetPosition(target, gameRef.current);
         player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(targetX - player.current.position.x, targetZ - player.current.position.z), 0.65);
       }
       performNearbyInteraction();
     }
 
-    const prompt = nearestInteraction(gameRef.current, sceneRef.current, player.current.position, nowRef.current);
+    const targets =
+      sceneRef.current === "garden"
+        ? buildGardenInteractionTargets(gameRef.current, activeCrittersRef.current)
+        : buildForestInteractionTargets(gameRef.current.gather.spots);
+    const prompt = placementId ? null : nearestInteraction(gameRef.current, targets, player.current.position, nowRef.current);
     nearbyRef.current = prompt;
     setNearbyInteraction(prompt);
 
-    cameraTarget.current.lerp(new Vector3(player.current.position.x, 0.42, player.current.position.z), 0.08);
+    cameraLookTarget.current.set(player.current.position.x, 0.42, player.current.position.z);
+    cameraTarget.current.lerp(cameraLookTarget.current, 0.08);
     clampToIsland(cameraTarget.current);
-    state.camera.position.lerp(cameraTarget.current.clone().add(CAMERA_OFFSET), 0.08);
+    cameraPositionTarget.current.copy(cameraTarget.current).add(cameraOffset.current);
+    state.camera.position.lerp(cameraPositionTarget.current, 0.08);
     state.camera.lookAt(cameraTarget.current);
   });
 
+  const placementDecoration = placementDecorationId
+    ? game.decorations.find((decoration) => decoration.id === placementDecorationId)
+    : null;
+
   return (
-    <group ref={player} position={SPAWN_POSITIONS[spawn.id]}>
-      <PlayerModel walkingRef={walkingRef} />
+    <>
+      <group ref={player} position={SPAWN_POSITIONS[spawn.id]}>
+        <PlayerModel walkingRef={walkingRef} />
+      </group>
+      {placementDecoration && (
+        <group ref={placementPreview} position={[0, 0.08, 0]}>
+          <DecorationPreview type={placementDecoration.type} validRef={placementValidRef} />
+        </group>
+      )}
+    </>
+  );
+}
+
+function DecorationModel({ type, preview = false }: { type: DecorationType; preview?: boolean }) {
+  const opacity = preview ? 0.48 : 1;
+  const transparent = preview;
+
+  if (type === "fence") {
+    return (
+      <group>
+        {[-0.22, 0.22].map((x) => (
+          <mesh key={x} position={[x, 0.28, 0]}>
+            <boxGeometry args={[0.07, 0.48, 0.08]} />
+            <meshStandardMaterial color="#8d6546" transparent={transparent} opacity={opacity} />
+          </mesh>
+        ))}
+        {[0.22, 0.38].map((y) => (
+          <mesh key={y} position={[0, y, 0]}>
+            <boxGeometry args={[0.58, 0.06, 0.08]} />
+            <meshStandardMaterial color="#b98258" transparent={transparent} opacity={opacity} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
+  if (type === "flower_pot") {
+    return (
+      <group>
+        <mesh position={[0, 0.18, 0]}>
+          <cylinderGeometry args={[0.16, 0.2, 0.25, 10]} />
+          <meshStandardMaterial color="#bd6b4a" transparent={transparent} opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 0.34, 0]}>
+          <sphereGeometry args={[0.17, 12, 8]} />
+          <meshStandardMaterial color="#77b86f" transparent={transparent} opacity={opacity} />
+        </mesh>
+        <mesh position={[0.04, 0.47, 0]}>
+          <sphereGeometry args={[0.07, 10, 8]} />
+          <meshStandardMaterial color="#f0a1bd" transparent={transparent} opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (type === "bench") {
+    return (
+      <group>
+        <mesh position={[0, 0.26, 0]}>
+          <boxGeometry args={[0.68, 0.09, 0.25]} />
+          <meshStandardMaterial color="#9a6a46" transparent={transparent} opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 0.42, 0.12]} rotation={[0.28, 0, 0]}>
+          <boxGeometry args={[0.68, 0.08, 0.26]} />
+          <meshStandardMaterial color="#b98258" transparent={transparent} opacity={opacity} />
+        </mesh>
+        {[-0.22, 0.22].map((x) => (
+          <mesh key={x} position={[x, 0.12, 0]}>
+            <boxGeometry args={[0.06, 0.24, 0.06]} />
+            <meshStandardMaterial color="#6f513d" transparent={transparent} opacity={opacity} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
+  if (type === "lamp") {
+    return (
+      <group>
+        <mesh position={[0, 0.45, 0]}>
+          <cylinderGeometry args={[0.035, 0.05, 0.82, 8]} />
+          <meshStandardMaterial color="#5c5b57" transparent={transparent} opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 0.92, 0]}>
+          <sphereGeometry args={[0.14, 12, 8]} />
+          <meshStandardMaterial color="#ffd86f" emissive="#f2bc46" emissiveIntensity={preview ? 0.15 : 0.35} transparent={transparent} opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 1.08, 0]}>
+          <coneGeometry args={[0.18, 0.18, 8]} />
+          <meshStandardMaterial color="#4f5654" transparent={transparent} opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  return (
+    <group>
+      <mesh position={[0, 0.08, 0]} scale={[1, 0.18, 0.72]}>
+        <sphereGeometry args={[0.42, 18, 10]} />
+        <meshStandardMaterial color="#7fc8d8" transparent opacity={preview ? 0.42 : 0.78} />
+      </mesh>
+      <mesh position={[-0.16, 0.16, 0.03]}>
+        <sphereGeometry args={[0.07, 8, 6]} />
+        <meshStandardMaterial color="#d8cfa4" transparent={transparent} opacity={opacity} />
+      </mesh>
+      <mesh position={[0.17, 0.15, -0.05]}>
+        <sphereGeometry args={[0.06, 8, 6]} />
+        <meshStandardMaterial color="#a8c98b" transparent={transparent} opacity={opacity} />
+      </mesh>
+    </group>
+  );
+}
+
+function DecorationPreview({ type, validRef }: { type: DecorationType; validRef: MutableRefObject<boolean> }) {
+  const material = useRef<MeshBasicMaterial>(null);
+
+  useFrame(() => {
+    if (!material.current) return;
+    material.current.color.set(validRef.current ? "#7be495" : "#ef6d79");
+  });
+
+  return (
+    <group>
+      <DecorationModel type={type} preview />
+      <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.43, 0.52, 32]} />
+        <meshBasicMaterial ref={material} color="#7be495" transparent opacity={0.78} />
+      </mesh>
     </group>
   );
 }
@@ -410,22 +688,41 @@ function HarvestEffect({ effect }: { effect: HarvestEffectType }) {
   );
 }
 
-function GardenWorld() {
+function GardenWorld({ palette, night }: { palette: ScenePalette; night: boolean }) {
+  const game = useGameStore((store) => store.game);
   const harvestEffects = useGameStore((store) => store.harvestEffects);
+  const activeCritters = useGameStore((store) => store.activeCritters);
+  const litLampIds = game.decorations
+    .filter((decoration) => decoration.type === "lamp" && isDecorationPlaced(decoration))
+    .slice(0, 4)
+    .map((decoration) => decoration.id);
+
   return (
     <>
       <mesh position={[0, -0.15, 0]}>
-        <cylinderGeometry args={[3.4, 3.8, 0.5, 8]} />
-        <meshStandardMaterial color="#7cc98e" flatShading />
+        <cylinderGeometry args={GARDEN_ISLAND_GEOMETRY.top} />
+        <meshStandardMaterial color={palette.gardenGrass} flatShading />
       </mesh>
       <mesh position={[0, -0.42, 0]}>
-        <cylinderGeometry args={[3.8, 3.2, 0.4, 8]} />
-        <meshStandardMaterial color="#a9724a" flatShading />
+        <cylinderGeometry args={GARDEN_ISLAND_GEOMETRY.bottom} />
+        <meshStandardMaterial color={palette.gardenSide} flatShading />
       </mesh>
-      <Tree position={[-2.55, 0, -1.75]} scale={0.82} />
-      <Tree position={[2.55, 0, 1.55]} scale={0.76} />
+      {GARDEN_TREES.map((tree) => (
+        <Tree key={`${tree.position[0]}:${tree.position[2]}`} position={tree.position} scale={tree.scale} palette={palette} />
+      ))}
       <PortalSign scene="garden" />
-      {Array.from({ length: 9 }, (_, index) => (
+      <CompostBin />
+      {game.decorations.filter(isDecorationPlaced).map((decoration) => (
+        <DecorationObject
+          decoration={decoration}
+          key={decoration.id}
+          lit={night && decoration.type === "lamp" && litLampIds.includes(decoration.id)}
+        />
+      ))}
+      {activeCritters.map((critter) => (
+        <CritterAgent critter={critter} key={critter.id} />
+      ))}
+      {Array.from({ length: PLOT_COUNT }, (_, index) => (
         <PlotTile key={index} index={index} />
       ))}
       {harvestEffects.map((effect) => (
@@ -435,20 +732,150 @@ function GardenWorld() {
   );
 }
 
-function Tree({ position, scale = 1 }: { position: [number, number, number]; scale?: number }) {
+function DecorationObject({ decoration, lit }: { decoration: PlacedDecoration & { x: number; z: number }; lit: boolean }) {
+  return (
+    <group position={[decoration.x, 0.08, decoration.z]} rotation={[0, decoration.rotY, 0]}>
+      <DecorationModel type={decoration.type} />
+      {lit && (
+        <>
+          <pointLight color="#ffd86f" intensity={0.9} distance={2.25} position={[0, 1.0, 0]} />
+          <mesh position={[0, 0.92, 0]}>
+            <sphereGeometry args={[0.18, 12, 8]} />
+            <meshBasicMaterial color="#ffe8a3" transparent opacity={0.26} />
+          </mesh>
+        </>
+      )}
+    </group>
+  );
+}
+
+function CompostBin() {
+  const game = useGameStore((store) => store.game);
+  const now = useGameStore((store) => store.now);
+  const filledSlots = game.compost.slots.filter(Boolean);
+  const readyCount = game.compost.slots.filter((slot) => slot && getCompostRemainingMs(slot, now) <= 0).length;
+  const remaining = filledSlots
+    .map((slot) => getCompostRemainingMs(slot, now))
+    .filter((value) => value > 0)
+    .sort((a, b) => a - b)[0];
+  const label = readyCount > 0 ? "완성!" : remaining ? formatDuration(remaining) : null;
+
+  return (
+    <group position={COMPOST_POSITION}>
+      <mesh position={[0, 0.22, 0]}>
+        <boxGeometry args={[0.66, 0.42, 0.52]} />
+        <meshStandardMaterial color="#8d6546" />
+      </mesh>
+      <mesh position={[0, 0.48, 0]} scale={[1, 0.36, 0.78]}>
+        <sphereGeometry args={[0.26, 12, 8]} />
+        <meshStandardMaterial color="#5b4032" />
+      </mesh>
+      <mesh position={[0, 0.04, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.38, 0.46, 16]} />
+        <meshBasicMaterial color="#fff0a8" transparent opacity={0.45} />
+      </mesh>
+      {label && (
+        <Html center position={[0, 1.0, 0]} style={{ pointerEvents: "none" }}>
+          <span className={`plot-tag ${readyCount > 0 ? "plot-tag--ready" : ""}`}>{label}</span>
+        </Html>
+      )}
+    </group>
+  );
+}
+
+function isCritterPointClear(x: number, z: number): boolean {
+  if (Math.hypot(x, z) > ISLAND_RADIUS - 0.45) return false;
+  return !PLOT_COLLIDERS.some((plot) => circleOverlapsAabb(x, z, 0.24, plot.x, plot.z, PLOT_HALF_SIZE + 0.08, PLOT_HALF_SIZE + 0.08));
+}
+
+function pickCritterWanderTarget(origin: Vector3): Vector3 {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const distance = 0.75 + Math.random() * 1.1;
+    const x = origin.x + Math.cos(angle) * distance;
+    const z = origin.z + Math.sin(angle) * distance;
+    if (isCritterPointClear(x, z)) return new Vector3(x, 0.08, z);
+  }
+  return new Vector3(origin.x, 0.08, origin.z);
+}
+
+function HeartBurst() {
+  const group = useRef<Group>(null);
+  const startedAt = useRef<number | null>(null);
+
+  useFrame((state) => {
+    if (!group.current) return;
+    if (startedAt.current === null) startedAt.current = state.clock.elapsedTime;
+    const progress = Math.min(1, (state.clock.elapsedTime - startedAt.current) / 0.8);
+    group.current.position.y = 0.45 + progress * 0.5;
+    group.current.scale.setScalar(1 + Math.sin(progress * Math.PI) * 0.35);
+  });
+
+  return (
+    <group ref={group}>
+      {[-0.1, 0, 0.1].map((x, index) => (
+        <mesh key={index} position={[x, 0.28 + index * 0.08, 0]}>
+          <sphereGeometry args={[0.045, 8, 6]} />
+          <meshStandardMaterial color="#f28aa8" emissive="#f28aa8" emissiveIntensity={0.25} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function CritterAgent({ critter }: { critter: ActiveCritter }) {
+  const group = useRef<Group>(null);
+  const target = useRef(new Vector3(critter.x, 0.08, critter.z));
+
+  useEffect(() => {
+    critterPositions.set(critter.id, new Vector3(critter.x, 0.08, critter.z));
+    return () => {
+      critterPositions.delete(critter.id);
+    };
+  }, [critter.id, critter.x, critter.z]);
+
+  useFrame((state, delta) => {
+    if (!group.current) return;
+    const current = group.current.position;
+    if (current.distanceTo(target.current) < 0.08) {
+      target.current = pickCritterWanderTarget(current);
+    }
+
+    const dx = target.current.x - current.x;
+    const dz = target.current.z - current.z;
+    const length = Math.hypot(dx, dz);
+    if (length > 0.001) {
+      const speed = critter.type === "butterfly" ? 0.42 : 0.26;
+      current.x += (dx / length) * speed * delta;
+      current.z += (dz / length) * speed * delta;
+      group.current.rotation.y = angleLerp(group.current.rotation.y, Math.atan2(dx, dz), Math.min(1, delta * 5));
+    }
+    current.y = (critter.type === "butterfly" ? 0.34 : 0.08) + Math.sin(state.clock.elapsedTime * 2.2 + critter.seed) * 0.035;
+    critterPositions.set(critter.id, current.clone());
+  });
+
+  return (
+    <group ref={group} position={[critter.x, 0.08, critter.z]} scale={critter.type === "butterfly" ? 1.05 : 1}>
+      <CritterModel type={critter.type} />
+      {critter.heartPulse > 0 && <HeartBurst key={critter.heartPulse} />}
+    </group>
+  );
+}
+
+function Tree({ position, scale = 1, palette }: { position: [number, number, number]; scale?: number; palette: ScenePalette }) {
   return (
     <group position={position} scale={scale}>
       <mesh position={[0, 0.35, 0]}>
         <cylinderGeometry args={[0.09, 0.13, 0.7, 7]} />
-        <meshStandardMaterial color="#8d6546" />
+        <meshStandardMaterial color={palette.trunk} />
       </mesh>
       <mesh position={[0, 0.92, 0]}>
         <coneGeometry args={[0.48, 0.95, 8]} />
-        <meshStandardMaterial color="#4c9b63" flatShading />
+        <meshStandardMaterial color={palette.treeDark} flatShading />
       </mesh>
       <mesh position={[0, 1.3, 0]}>
         <coneGeometry args={[0.36, 0.75, 8]} />
-        <meshStandardMaterial color="#67b77a" flatShading />
+        <meshStandardMaterial color={palette.treeLight} flatShading />
       </mesh>
     </group>
   );
@@ -543,6 +970,60 @@ function ForageModel({ itemId, collected }: { itemId: string; collected: boolean
     );
   }
 
+  if (itemId === "cherry_petal") {
+    return (
+      <group>
+        <mesh position={[0, 0.24, 0]} rotation={[0.25, 0, 0.4]} scale={[1.35, 0.45, 0.08]}>
+          <sphereGeometry args={[0.13, 10, 8]} />
+          <meshStandardMaterial color="#f4a8bd" transparent opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (itemId === "cicada_shell") {
+    return (
+      <group>
+        <mesh position={[0, 0.23, 0]} scale={[0.8, 1.05, 0.55]}>
+          <sphereGeometry args={[0.14, 10, 8]} />
+          <meshStandardMaterial color="#d1a66e" transparent opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 0.34, -0.03]} scale={[0.55, 0.45, 0.4]}>
+          <sphereGeometry args={[0.09, 8, 6]} />
+          <meshStandardMaterial color="#e4c38c" transparent opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (itemId === "acorn") {
+    return (
+      <group>
+        <mesh position={[0, 0.21, 0]}>
+          <sphereGeometry args={[0.13, 10, 8]} />
+          <meshStandardMaterial color="#9a603b" transparent opacity={opacity} />
+        </mesh>
+        <mesh position={[0, 0.34, 0]}>
+          <sphereGeometry args={[0.12, 10, 4, 0, Math.PI * 2, 0, Math.PI / 2]} />
+          <meshStandardMaterial color="#6f5132" transparent opacity={opacity} />
+        </mesh>
+      </group>
+    );
+  }
+
+  if (itemId === "snow_crystal") {
+    return (
+      <group>
+        {Array.from({ length: 6 }, (_, index) => (
+          <mesh key={index} position={[0, 0.25, 0]} rotation={[0, (index / 6) * Math.PI * 2, 0]}>
+            <boxGeometry args={[0.035, 0.035, 0.32]} />
+            <meshStandardMaterial color="#d8f2ff" emissive="#bde9ff" emissiveIntensity={0.4} transparent opacity={opacity} />
+          </mesh>
+        ))}
+      </group>
+    );
+  }
+
   return (
     <group>
       <mesh position={[0, 0.28, 0]}>
@@ -619,7 +1100,70 @@ function Fireflies() {
   );
 }
 
-function ForestWorld() {
+type ParticleKind = "petal" | "rain" | "leaf" | "snow";
+
+function getParticleKind(season: SeasonId, weather: WeatherId): ParticleKind | null {
+  if (season === "spring") return "petal";
+  if (season === "autumn") return "leaf";
+  if (season === "summer" && weather === "rain") return "rain";
+  if (season === "winter" && weather === "snow") return "snow";
+  return null;
+}
+
+function SeasonalParticles({ season, weather }: { season: SeasonId; weather: WeatherId }) {
+  const kind = getParticleKind(season, weather);
+  const dummy = useMemo(() => new Object3D(), []);
+  const mesh = useRef<InstancedMesh>(null);
+  const particles = useMemo(() => {
+    if (!kind) return [];
+    const count = kind === "rain" ? 40 : 28;
+    return Array.from({ length: count }, () => ({
+      x: (Math.random() - 0.5) * 8,
+      y: 0.8 + Math.random() * 3.2,
+      z: (Math.random() - 0.5) * 8,
+      drift: (Math.random() - 0.5) * (kind === "snow" ? 0.35 : 0.18),
+      spin: Math.random() * Math.PI * 2,
+      speed: kind === "rain" ? 2.9 + Math.random() * 0.9 : kind === "snow" ? 0.32 + Math.random() * 0.18 : 0.26 + Math.random() * 0.16,
+    }));
+  }, [kind]);
+
+  useFrame((state, delta) => {
+    if (!mesh.current || !kind) return;
+    mesh.current.count = particles.length;
+    particles.forEach((particle, index) => {
+      particle.y -= particle.speed * delta;
+      particle.x += Math.sin(state.clock.elapsedTime + particle.spin) * particle.drift * delta;
+      particle.z += (kind === "rain" ? 0.42 : Math.cos(state.clock.elapsedTime * 0.8 + particle.spin) * 0.16) * delta;
+      particle.spin += delta * (kind === "rain" ? 0.2 : 1.5);
+      if (particle.y < 0.08) {
+        particle.x = (Math.random() - 0.5) * 8;
+        particle.y = 3.4 + Math.random() * 1.2;
+        particle.z = (Math.random() - 0.5) * 8;
+      }
+
+      dummy.position.set(particle.x, particle.y, particle.z);
+      dummy.rotation.set(kind === "rain" ? -0.22 : particle.spin, 0, kind === "rain" ? 0.12 : particle.spin * 0.5);
+      dummy.scale.setScalar(kind === "rain" ? 1 : 0.8 + Math.sin(particle.spin) * 0.12);
+      dummy.updateMatrix();
+      mesh.current!.setMatrixAt(index, dummy.matrix);
+    });
+    mesh.current.instanceMatrix.needsUpdate = true;
+  });
+
+  if (!kind) return null;
+
+  const color = kind === "petal" ? "#f2a2c0" : kind === "leaf" ? "#d58744" : kind === "snow" ? "#f1fbff" : "#8ec9ee";
+  const opacity = kind === "rain" ? 0.48 : 0.74;
+
+  return (
+    <instancedMesh ref={mesh} args={[undefined, undefined, particles.length]}>
+      {kind === "rain" ? <boxGeometry args={[0.018, 0.26, 0.018]} /> : <planeGeometry args={[0.13, 0.06]} />}
+      <meshBasicMaterial color={color} transparent opacity={opacity} depthWrite={false} />
+    </instancedMesh>
+  );
+}
+
+function ForestWorld({ palette }: { palette: ScenePalette }) {
   const game = useGameStore((store) => store.game);
   const now = useGameStore((store) => store.now);
   const startGatherRound = useGameStore((store) => store.startGatherRound);
@@ -628,17 +1172,16 @@ function ForestWorld() {
   return (
     <>
       <mesh position={[0, -0.18, 0]}>
-        <cylinderGeometry args={[3.5, 3.9, 0.48, 9]} />
-        <meshStandardMaterial color="#5fae69" flatShading />
+        <cylinderGeometry args={FOREST_ISLAND_GEOMETRY.top} />
+        <meshStandardMaterial color={palette.forestGrass} flatShading />
       </mesh>
       <mesh position={[0, -0.45, 0]}>
-        <cylinderGeometry args={[3.9, 3.3, 0.4, 9]} />
-        <meshStandardMaterial color="#7b5a43" flatShading />
+        <cylinderGeometry args={FOREST_ISLAND_GEOMETRY.bottom} />
+        <meshStandardMaterial color={palette.forestSide} flatShading />
       </mesh>
-      <Tree position={[-2.45, 0.0, -1.65]} scale={1.12} />
-      <Tree position={[2.38, 0.0, -1.2]} scale={0.95} />
-      <Tree position={[-2.1, 0.0, 1.65]} scale={0.82} />
-      <Tree position={[2.2, 0.0, 1.4]} scale={1.02} />
+      {FOREST_TREES.map((tree) => (
+        <Tree key={`${tree.position[0]}:${tree.position[2]}`} position={tree.position} scale={tree.scale} palette={palette} />
+      ))}
       <PortalSign scene="forest" />
       {game.gather.spots.map((spot, index) => (
         <ForageSpot index={index} key={spot.id} />
@@ -680,18 +1223,22 @@ export function GardenScene() {
   const scene = useGameStore((store) => store.game.scene);
   const now = useGameStore((store) => store.now);
   const night = isNightTime(now);
+  const season = getSeason(now);
+  const weather = getWeather(now);
+  const palette = getScenePalette(season, night);
 
   return (
     <Canvas
-      camera={{ position: [5.2, 6.2, 5.2], fov: 40 }}
+      camera={{ position: INITIAL_CAMERA_POSITION, fov: 40 }}
       dpr={[1, 1.5]}
       onCreated={({ camera }) => camera.lookAt(0, 0, 0)}
     >
-      <color attach="background" args={[night ? "#17233b" : "#dff4ec"]} />
+      <color attach="background" args={[palette.background]} />
       <ambientLight intensity={night ? 0.34 : 0.75} color={night ? "#9db8ff" : "#ffffff"} />
       <directionalLight position={[4, 8, 4]} intensity={night ? 0.56 : 1.1} color={night ? "#bcd4ff" : "#ffffff"} />
       <SunOrMoon night={night} />
-      {scene === "garden" ? <GardenWorld /> : <ForestWorld />}
+      <SeasonalParticles season={season} weather={weather} />
+      {scene === "garden" ? <GardenWorld palette={palette} night={night} /> : <ForestWorld palette={palette} />}
       <PlayerController />
     </Canvas>
   );
