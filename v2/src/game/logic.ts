@@ -113,7 +113,8 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
     merged.plots.forEach((plot) => {
       if (!plot.crop) return;
       const crop = CROP_DEFS[plot.crop.type];
-      plot.crop.boostMs = crop.growMs;
+      plot.crop.plantedAt = now - crop.growMs;
+      plot.crop.boostMs = 0;
     });
     merged.balanceId = BALANCE_ID;
   }
