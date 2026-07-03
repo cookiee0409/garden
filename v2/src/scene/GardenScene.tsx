@@ -1,12 +1,16 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
+import { Vector3 } from "three";
 import type { Group, Mesh } from "three";
 import { FORAGE_DEFS, FORAGE_POSITIONS, PLOT_UNLOCK_COSTS } from "../game/data";
+import { getInteractionPrompt } from "../game/interactions";
 import { formatDuration, getCropStatus, getGatherRemainingMs, isNightTime } from "../game/logic";
 import { useGameStore } from "../game/store";
-import type { CareEffect, HarvestEffect as HarvestEffectType } from "../game/types";
+import type { CareEffect, GameState, HarvestEffect as HarvestEffectType, InteractionPrompt, InteractionTarget, PlayerSpawnId, SceneId } from "../game/types";
+import { virtualInteraction, virtualMove } from "../input/playerInput";
 import { CropModel } from "./CropModel";
+import { PlayerModel } from "./PlayerModel";
 
 function plotPosition(index: number): [number, number] {
   const row = Math.floor(index / 3);
@@ -17,6 +21,262 @@ function plotPosition(index: number): [number, number] {
 function forestPosition(index: number): [number, number] {
   const position = FORAGE_POSITIONS[index % FORAGE_POSITIONS.length];
   return [(position.x / 100 - 0.5) * 5.6, (position.y / 100 - 0.5) * 4.8];
+}
+
+const PLAYER_SPEED = 2.2;
+const PLAYER_RADIUS = 0.24;
+const ISLAND_RADIUS = 3.05;
+const INTERACTION_RADIUS = 0.9;
+const CAMERA_OFFSET = new Vector3(5.2, 6.2, 5.2);
+
+const SPAWN_POSITIONS: Record<PlayerSpawnId, [number, number, number]> = {
+  "garden-default": [0, 0.05, 2.12],
+  "garden-from-forest": [0, 0.05, 2.12],
+  "forest-from-garden": [0, 0.05, -2.12],
+};
+
+const PORTALS: Record<SceneId, { target: InteractionTarget; position: [number, number, number]; sign: string }> = {
+  garden: {
+    target: { kind: "portal", id: "garden-to-forest", to: "forest" },
+    position: [0, 0, 2.72],
+    sign: "숲",
+  },
+  forest: {
+    target: { kind: "portal", id: "forest-to-garden", to: "garden" },
+    position: [0, 0, -2.72],
+    sign: "정원",
+  },
+};
+
+const GARDEN_TREE_COLLIDERS = [
+  { x: -2.55, z: -1.75, radius: 0.28 },
+  { x: 2.55, z: 1.55, radius: 0.28 },
+];
+const FOREST_TREE_COLLIDERS = [
+  { x: -2.45, z: -1.65, radius: 0.3 },
+  { x: 2.38, z: -1.2, radius: 0.28 },
+  { x: -2.1, z: 1.65, radius: 0.25 },
+  { x: 2.2, z: 1.4, radius: 0.29 },
+];
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function angleLerp(from: number, to: number, amount: number): number {
+  const delta = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+  return from + delta * amount;
+}
+
+function clampToIsland(position: Vector3) {
+  const max = ISLAND_RADIUS - PLAYER_RADIUS;
+  const distance = Math.hypot(position.x, position.z);
+  if (distance <= max || distance === 0) return;
+  const scale = max / distance;
+  position.x *= scale;
+  position.z *= scale;
+}
+
+function resolveAabbCollision(position: Vector3, centerX: number, centerZ: number, halfX: number, halfZ: number) {
+  const dx = position.x - centerX;
+  const dz = position.z - centerZ;
+  const overlapX = halfX + PLAYER_RADIUS - Math.abs(dx);
+  const overlapZ = halfZ + PLAYER_RADIUS - Math.abs(dz);
+  if (overlapX <= 0 || overlapZ <= 0) return;
+
+  if (overlapX < overlapZ) {
+    position.x += dx >= 0 ? overlapX : -overlapX;
+  } else {
+    position.z += dz >= 0 ? overlapZ : -overlapZ;
+  }
+}
+
+function resolveCircleCollision(position: Vector3, centerX: number, centerZ: number, radius: number) {
+  const dx = position.x - centerX;
+  const dz = position.z - centerZ;
+  const distance = Math.hypot(dx, dz);
+  const minDistance = radius + PLAYER_RADIUS;
+  if (distance >= minDistance) return;
+
+  if (distance === 0) {
+    position.x += minDistance;
+    return;
+  }
+  const push = (minDistance - distance) / distance;
+  position.x += dx * push;
+  position.z += dz * push;
+}
+
+function resolveCollisions(position: Vector3, scene: SceneId) {
+  clampToIsland(position);
+
+  if (scene === "garden") {
+    Array.from({ length: 9 }, (_, index) => plotPosition(index)).forEach(([x, z]) => {
+      resolveAabbCollision(position, x, z, 0.55, 0.55);
+    });
+    GARDEN_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+  } else {
+    FOREST_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+  }
+
+  clampToIsland(position);
+}
+
+function targetPosition(target: InteractionTarget): [number, number] {
+  if (target.kind === "plot") return plotPosition(target.index);
+  if (target.kind === "forage") return forestPosition(target.index);
+  const portal = target.id === "garden-to-forest" ? PORTALS.garden : PORTALS.forest;
+  return [portal.position[0], portal.position[2]];
+}
+
+function nearestInteraction(game: GameState, scene: SceneId, position: Vector3, now: number): InteractionPrompt | null {
+  const targets: InteractionTarget[] =
+    scene === "garden"
+      ? [
+          ...game.plots.map((_, index) => ({ kind: "plot", index }) as InteractionTarget),
+          PORTALS.garden.target,
+        ]
+      : [
+          ...game.gather.spots.reduce<InteractionTarget[]>((items, spot, index) => {
+            if (!spot.collected) items.push({ kind: "forage", index });
+            return items;
+          }, []),
+          PORTALS.forest.target,
+        ];
+
+  let nearestTarget: InteractionTarget | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  targets.forEach((target) => {
+    const [x, z] = targetPosition(target);
+    const distance = Math.hypot(position.x - x, position.z - z);
+    if (distance > INTERACTION_RADIUS) return;
+    if (distance < nearestDistance) {
+      nearestTarget = target;
+      nearestDistance = distance;
+    }
+  });
+
+  return nearestTarget ? getInteractionPrompt(game, nearestTarget, now) : null;
+}
+
+function PlayerController() {
+  const scene = useGameStore((store) => store.game.scene);
+  const game = useGameStore((store) => store.game);
+  const now = useGameStore((store) => store.now);
+  const spawn = useGameStore((store) => store.playerSpawn);
+  const setNearbyInteraction = useGameStore((store) => store.setNearbyInteraction);
+  const performNearbyInteraction = useGameStore((store) => store.performNearbyInteraction);
+
+  const player = useRef<Group>(null);
+  const keys = useRef(new Set<string>());
+  const gameRef = useRef(game);
+  const nowRef = useRef(now);
+  const sceneRef = useRef(scene);
+  const nearbyRef = useRef<InteractionPrompt | null>(null);
+  const walkingRef = useRef(false);
+  const cameraTarget = useRef(new Vector3(0, 0.4, 0));
+  const nextPosition = useRef(new Vector3());
+  const lastVirtualInteraction = useRef(virtualInteraction.requestId);
+
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
+
+  useEffect(() => {
+    nowRef.current = now;
+  }, [now]);
+
+  useEffect(() => {
+    sceneRef.current = scene;
+  }, [scene]);
+
+  useEffect(() => {
+    const position = SPAWN_POSITIONS[spawn.id];
+    player.current?.position.set(...position);
+    cameraTarget.current.set(position[0], 0.4, position[2]);
+    setNearbyInteraction(null);
+  }, [setNearbyInteraction, spawn.id, spawn.version]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTextInputTarget(event.target)) return;
+      if (event.code === "KeyE" || event.code === "Space") {
+        event.preventDefault();
+        const target = nearbyRef.current?.target;
+        if (target && player.current) {
+          const [x, z] = targetPosition(target);
+          player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(x - player.current.position.x, z - player.current.position.z), 0.65);
+        }
+        performNearbyInteraction();
+        return;
+      }
+      keys.current.add(event.code);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      keys.current.delete(event.code);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [performNearbyInteraction]);
+
+  useFrame((state, delta) => {
+    if (!player.current) return;
+
+    let x = 0;
+    let z = 0;
+    if (keys.current.has("KeyA") || keys.current.has("ArrowLeft")) x -= 1;
+    if (keys.current.has("KeyD") || keys.current.has("ArrowRight")) x += 1;
+    if (keys.current.has("KeyW") || keys.current.has("ArrowUp")) z -= 1;
+    if (keys.current.has("KeyS") || keys.current.has("ArrowDown")) z += 1;
+
+    x += virtualMove.x;
+    z += virtualMove.z;
+
+    const length = Math.hypot(x, z);
+    const moving = length > 0.08;
+    walkingRef.current = moving;
+    if (moving) {
+      x /= length;
+      z /= length;
+      nextPosition.current.copy(player.current.position);
+      nextPosition.current.x += x * PLAYER_SPEED * delta;
+      nextPosition.current.z += z * PLAYER_SPEED * delta;
+      resolveCollisions(nextPosition.current, sceneRef.current);
+      player.current.position.copy(nextPosition.current);
+      player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(x, z), Math.min(1, delta * 12));
+    }
+
+    if (lastVirtualInteraction.current !== virtualInteraction.requestId) {
+      lastVirtualInteraction.current = virtualInteraction.requestId;
+      const target = nearbyRef.current?.target;
+      if (target) {
+        const [targetX, targetZ] = targetPosition(target);
+        player.current.rotation.y = angleLerp(player.current.rotation.y, Math.atan2(targetX - player.current.position.x, targetZ - player.current.position.z), 0.65);
+      }
+      performNearbyInteraction();
+    }
+
+    const prompt = nearestInteraction(gameRef.current, sceneRef.current, player.current.position, nowRef.current);
+    nearbyRef.current = prompt;
+    setNearbyInteraction(prompt);
+
+    cameraTarget.current.lerp(new Vector3(player.current.position.x, 0.42, player.current.position.z), 0.08);
+    clampToIsland(cameraTarget.current);
+    state.camera.position.lerp(cameraTarget.current.clone().add(CAMERA_OFFSET), 0.08);
+    state.camera.lookAt(cameraTarget.current);
+  });
+
+  return (
+    <group ref={player} position={SPAWN_POSITIONS[spawn.id]}>
+      <PlayerModel walkingRef={walkingRef} />
+    </group>
+  );
 }
 
 function ReadyMarker() {
@@ -66,7 +326,7 @@ function PlotTile({ index }: { index: number }) {
   const selected = useGameStore((store) => store.game.selectedPlot === index);
   const now = useGameStore((store) => store.now);
   const allCareEffects = useGameStore((store) => store.careEffects);
-  const clickPlot = useGameStore((store) => store.clickPlot);
+  const selectPlot = useGameStore((store) => store.selectPlot);
   const [x, z] = plotPosition(index);
 
   const status = plot.crop ? getCropStatus(plot, now) : null;
@@ -86,7 +346,7 @@ function PlotTile({ index }: { index: number }) {
         position={[0, 0.1, 0]}
         onClick={(event) => {
           event.stopPropagation();
-          clickPlot(index);
+          selectPlot(index);
         }}
       >
         <boxGeometry args={[1.1, 0.2, 1.1]} />
@@ -162,6 +422,9 @@ function GardenWorld() {
         <cylinderGeometry args={[3.8, 3.2, 0.4, 8]} />
         <meshStandardMaterial color="#a9724a" flatShading />
       </mesh>
+      <Tree position={[-2.55, 0, -1.75]} scale={0.82} />
+      <Tree position={[2.55, 0, 1.55]} scale={0.76} />
+      <PortalSign scene="garden" />
       {Array.from({ length: 9 }, (_, index) => (
         <PlotTile key={index} index={index} />
       ))}
@@ -187,6 +450,30 @@ function Tree({ position, scale = 1 }: { position: [number, number, number]; sca
         <coneGeometry args={[0.36, 0.75, 8]} />
         <meshStandardMaterial color="#67b77a" flatShading />
       </mesh>
+    </group>
+  );
+}
+
+function PortalSign({ scene }: { scene: SceneId }) {
+  const portal = PORTALS[scene];
+  const [x, y, z] = portal.position;
+  return (
+    <group position={[x, y, z]}>
+      <mesh position={[0, 0.025, scene === "garden" ? 0.18 : -0.18]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[1.1, 0.62]} />
+        <meshStandardMaterial color="#d5b181" transparent opacity={0.92} />
+      </mesh>
+      <mesh position={[0, 0.35, 0]}>
+        <cylinderGeometry args={[0.045, 0.06, 0.7, 6]} />
+        <meshStandardMaterial color="#8d6546" flatShading />
+      </mesh>
+      <mesh position={[0, 0.78, 0]}>
+        <boxGeometry args={[0.72, 0.28, 0.08]} />
+        <meshStandardMaterial color="#b98258" flatShading />
+      </mesh>
+      <Html center position={[0, 0.79, scene === "garden" ? 0.07 : -0.07]} style={{ pointerEvents: "none" }}>
+        <span className="portal-tag">{portal.sign}</span>
+      </Html>
     </group>
   );
 }
@@ -269,7 +556,9 @@ function ForageModel({ itemId, collected }: { itemId: string; collected: boolean
 
 function ForageSpot({ index }: { index: number }) {
   const spot = useGameStore((store) => store.game.gather.spots[index]);
-  const collectForage = useGameStore((store) => store.collectForage);
+  const selected = useGameStore((store) => store.selectedForage === index);
+  const nearby = useGameStore((store) => store.nearbyInteraction?.target.kind === "forage" && store.nearbyInteraction.target.index === index);
+  const selectForage = useGameStore((store) => store.selectForage);
   const group = useRef<Group>(null);
   const [x, z] = forestPosition(index);
   const item = FORAGE_DEFS[spot.item];
@@ -286,7 +575,7 @@ function ForageSpot({ index }: { index: number }) {
       position={[x, 0.05, z]}
       onClick={(event) => {
         event.stopPropagation();
-        collectForage(index);
+        selectForage(index);
       }}
       scale={spot.collected ? 0.62 : 1}
     >
@@ -297,8 +586,8 @@ function ForageSpot({ index }: { index: number }) {
       <ForageModel itemId={spot.item} collected={spot.collected} />
       {!spot.collected && (
         <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.34, 0.4, 24]} />
-          <meshBasicMaterial color={item.nightOnly ? "#9dd9ff" : "#fff0a8"} transparent opacity={0.82} />
+          <ringGeometry args={selected || nearby ? [0.38, 0.47, 24] : [0.34, 0.4, 24]} />
+          <meshBasicMaterial color={selected || nearby ? "#f2bc46" : item.nightOnly ? "#9dd9ff" : "#fff0a8"} transparent opacity={0.86} />
         </mesh>
       )}
       {!spot.collected && (
@@ -350,6 +639,7 @@ function ForestWorld() {
       <Tree position={[2.38, 0.0, -1.2]} scale={0.95} />
       <Tree position={[-2.1, 0.0, 1.65]} scale={0.82} />
       <Tree position={[2.2, 0.0, 1.4]} scale={1.02} />
+      <PortalSign scene="forest" />
       {game.gather.spots.map((spot, index) => (
         <ForageSpot index={index} key={spot.id} />
       ))}
@@ -402,6 +692,7 @@ export function GardenScene() {
       <directionalLight position={[4, 8, 4]} intensity={night ? 0.56 : 1.1} color={night ? "#bcd4ff" : "#ffffff"} />
       <SunOrMoon night={night} />
       {scene === "garden" ? <GardenWorld /> : <ForestWorld />}
+      <PlayerController />
     </Canvas>
   );
 }

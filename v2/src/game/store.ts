@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { CODEX_REWARDS, CROP_DEFS, FERTILIZER_RECIPE, GATHER_REFILL_MS, PLOT_UNLOCK_COSTS, QUALITY_DEFS, SAVE_KEY } from "./data";
+import { isSameTarget } from "./interactions";
 import {
   addCodex,
   addInventory,
@@ -21,7 +22,17 @@ import {
   rollQuality,
 } from "./logic";
 import { migrate } from "./save";
-import type { CareEffect, GameState, HarvestEffect, QualityId, SceneId, WelcomeSummary } from "./types";
+import type {
+  CareEffect,
+  GameState,
+  HarvestEffect,
+  InteractionPrompt,
+  InteractionTarget,
+  PlayerSpawnId,
+  QualityId,
+  SceneId,
+  WelcomeSummary,
+} from "./types";
 
 const WELCOME_BACK_THRESHOLD_MS = 30 * 60 * 1000;
 
@@ -89,11 +100,20 @@ interface GameStore {
   welcomeSummary: WelcomeSummary | null;
   harvestEffects: HarvestEffect[];
   careEffects: CareEffect[];
+  nearbyInteraction: InteractionPrompt | null;
+  selectedForage: number | null;
+  playerSpawn: { id: PlayerSpawnId; version: number };
   showToast: (message: string) => void;
   dismissWelcome: () => void;
   switchScene: (scene: SceneId) => void;
   selectSeed: (cropId: string) => void;
   clickPlot: (index: number) => void;
+  selectPlot: (index: number) => void;
+  selectForage: (index: number) => void;
+  setNearbyInteraction: (prompt: InteractionPrompt | null) => void;
+  performNearbyInteraction: () => void;
+  performPlotAction: (index: number) => void;
+  performForageAction: (index: number) => void;
   buySeed: (cropId: string) => void;
   sellItem: (key: string) => void;
   sellAll: () => void;
@@ -144,6 +164,31 @@ export const useGameStore = create<GameStore>((set, get) => {
     next.seeds[cropId] = (next.seeds[cropId] || 0) + amount;
   };
 
+  const isTargetNearby = (target: InteractionTarget) => isSameTarget(get().nearbyInteraction?.target ?? null, target);
+
+  const requireNearby = (target: InteractionTarget): boolean => {
+    if (isTargetNearby(target)) return true;
+    showToast("가까이 가야 합니다.");
+    return false;
+  };
+
+  const spawnForScene = (scene: SceneId): PlayerSpawnId => (scene === "garden" ? "garden-from-forest" : "forest-from-garden");
+
+  const switchSceneTo = (scene: SceneId) => {
+    if (!["garden", "forest"].includes(scene)) return;
+    const current = get().game;
+    if (current.scene === scene) return;
+    const next = structuredClone(current);
+    next.scene = scene;
+    writeSave(next);
+    set((store) => ({
+      game: next,
+      nearbyInteraction: null,
+      selectedForage: null,
+      playerSpawn: { id: spawnForScene(scene), version: store.playerSpawn.version + 1 },
+    }));
+  };
+
   const harvestInto = (next: GameState, index: number, now: number): { effect: HarvestEffect; message: string } | null => {
     const plot = next.plots[index];
     if (!plot?.crop) return null;
@@ -174,6 +219,103 @@ export const useGameStore = create<GameStore>((set, get) => {
       },
       message: `${status.def.name} ${qualityName} 품질을 수확했습니다.`,
     };
+  };
+
+  const runPlotAction = (index: number, checkNearby: boolean) => {
+    const target: InteractionTarget = { kind: "plot", index };
+    if (checkNearby && !requireNearby(target)) return;
+
+    const now = Date.now();
+    const next = structuredClone(get().game);
+    const plot = next.plots[index];
+    if (!plot) return;
+    next.selectedPlot = index;
+
+    if (!plot.unlocked) {
+      const cost = PLOT_UNLOCK_COSTS[index] || 0;
+      if (next.gold < cost) {
+        showToast(`밭을 열려면 ${cost}G가 필요합니다.`);
+        commit(next);
+        return;
+      }
+      next.gold -= cost;
+      plot.unlocked = true;
+      showToast(`새 밭을 열었습니다. (-${cost}G)`);
+      commit(next);
+      return;
+    }
+
+    if (!plot.crop) {
+      const crop = CROP_DEFS[next.selectedSeed];
+      if ((next.seeds[crop.id] || 0) <= 0) {
+        showToast(`${crop.name} 씨앗이 없습니다. 상점에서 씨앗을 사 주세요.`);
+        commit(next);
+        return;
+      }
+      next.seeds[crop.id] -= 1;
+      plot.crop = {
+        type: crop.id,
+        plantedAt: now,
+        boostMs: 0,
+        watered: false,
+        fertilized: false,
+      };
+      showToast(`${crop.name}을 심었습니다.`);
+      commit(next);
+      return;
+    }
+
+    const status = getCropStatus(plot, now);
+    if (!status.isReady) {
+      if (!plot.crop.watered) {
+        plot.crop.watered = true;
+        showToast(`${status.def.name}에 물을 주었습니다. 좋은 품질 확률이 올랐습니다.`);
+        commit(next);
+        addCareEffect({ id: nextEffectId++, plotIndex: index, kind: "water" });
+        return;
+      }
+
+      showToast(`${status.def.name}이 자라는 중입니다. 남은 시간은 ${formatDuration(status.remaining)}입니다.`);
+      commit(next);
+      return;
+    }
+
+    const result = harvestInto(next, index, now);
+    if (!result) return;
+    showToast(result.message);
+    commit(next);
+    addHarvestEffect(result.effect);
+  };
+
+  const runForageAction = (index: number, checkNearby: boolean) => {
+    const target: InteractionTarget = { kind: "forage", index };
+    if (checkNearby && !requireNearby(target)) return;
+
+    const now = Date.now();
+    const next = structuredClone(get().game);
+    const spot = next.gather.spots[index];
+    if (!spot || spot.collected) return;
+
+    spot.collected = true;
+    next.selectedPlot = null;
+    const key = makeItemKey("forage", spot.item, "normal");
+    addInventory(next, key, 1);
+    addCodex(next, key, now);
+    showToast(`${getItemInfo(key).name}을 주웠습니다.`);
+    commit(next);
+  };
+
+  const runTargetInteraction = (target: InteractionTarget, checkNearby: boolean) => {
+    if (target.kind === "portal") {
+      if (checkNearby && !requireNearby(target)) return;
+      switchSceneTo(target.to);
+      return;
+    }
+    if (target.kind === "plot") {
+      runPlotAction(target.index, checkNearby);
+      return;
+    }
+    runForageAction(target.index, checkNearby);
   };
 
   window.setInterval(() => {
@@ -207,6 +349,9 @@ export const useGameStore = create<GameStore>((set, get) => {
     welcomeSummary,
     harvestEffects: [],
     careEffects: [],
+    nearbyInteraction: null,
+    selectedForage: null,
+    playerSpawn: { id: "garden-default", version: 0 },
     showToast,
 
     dismissWelcome: () => {
@@ -214,10 +359,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     switchScene: (scene) => {
-      if (!["garden", "forest"].includes(scene)) return;
-      const next = structuredClone(get().game);
-      next.scene = scene;
-      commit(next);
+      switchSceneTo(scene);
     },
 
     selectSeed: (cropId) => {
@@ -228,66 +370,56 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     clickPlot: (index) => {
-      const now = Date.now();
+      get().selectPlot(index);
+    },
+
+    selectPlot: (index) => {
       const next = structuredClone(get().game);
       const plot = next.plots[index];
       if (!plot) return;
       next.selectedPlot = index;
-
-      if (!plot.unlocked) {
-        const cost = PLOT_UNLOCK_COSTS[index] || 0;
-        if (next.gold < cost) {
-          showToast(`밭을 열려면 ${cost}G가 필요합니다.`);
-          commit(next);
-          return;
-        }
-        next.gold -= cost;
-        plot.unlocked = true;
-        showToast(`새 밭을 열었습니다. (-${cost}G)`);
-        commit(next);
-        return;
-      }
-
-      if (!plot.crop) {
-        const crop = CROP_DEFS[next.selectedSeed];
-        if ((next.seeds[crop.id] || 0) <= 0) {
-          showToast(`${crop.name} 씨앗이 없습니다. 상점에서 씨앗을 사 주세요.`);
-          commit(next);
-          return;
-        }
-        next.seeds[crop.id] -= 1;
-        plot.crop = {
-          type: crop.id,
-          plantedAt: now,
-          boostMs: 0,
-          watered: false,
-          fertilized: false,
-        };
-        showToast(`${crop.name}을 심었습니다.`);
-        commit(next);
-        return;
-      }
-
-      const status = getCropStatus(plot, now);
-      if (!status.isReady) {
-        if (!plot.crop.watered) {
-          plot.crop.watered = true;
-          showToast(`${status.def.name}에 물을 주었습니다. 좋은 품질 확률이 올랐습니다.`);
-          commit(next);
-          addCareEffect({ id: nextEffectId++, plotIndex: index, kind: "water" });
-          return;
-        }
-
-        showToast(`${status.def.name}이 자라는 중입니다. 남은 시간은 ${formatDuration(status.remaining)}입니다.`);
-        commit(next);
-        return;
-      }
-
-      const result = harvestInto(next, index, now);
-      if (!result) return;
-      showToast(result.message);
       commit(next);
-      addHarvestEffect(result.effect);
+      set({ selectedForage: null });
+    },
+
+    selectForage: (index) => {
+      const spot = get().game.gather.spots[index];
+      if (!spot) return;
+      set({ selectedForage: index });
+    },
+
+    setNearbyInteraction: (prompt) => {
+      const current = get();
+      const samePrompt =
+        current.nearbyInteraction?.targetKey === prompt?.targetKey &&
+        current.nearbyInteraction?.action === prompt?.action &&
+        current.nearbyInteraction?.label === prompt?.label;
+      const nextSelectedPlot = prompt?.target.kind === "plot" ? prompt.target.index : current.game.selectedPlot;
+      const nextSelectedForage = prompt?.target.kind === "forage" ? prompt.target.index : current.selectedForage;
+      const plotUnchanged = current.game.selectedPlot === nextSelectedPlot;
+      const forageUnchanged = current.selectedForage === nextSelectedForage;
+      if (samePrompt && plotUnchanged && forageUnchanged) return;
+
+      const nextGame = plotUnchanged ? current.game : { ...current.game, selectedPlot: nextSelectedPlot };
+      set({
+        game: nextGame,
+        nearbyInteraction: prompt,
+        selectedForage: nextSelectedForage,
+      });
+    },
+
+    performNearbyInteraction: () => {
+      const prompt = get().nearbyInteraction;
+      if (!prompt) return;
+      runTargetInteraction(prompt.target, true);
+    },
+
+    performPlotAction: (index) => {
+      runPlotAction(index, true);
+    },
+
+    performForageAction: (index) => {
+      runForageAction(index, true);
     },
 
     buySeed: (cropId) => {
@@ -361,17 +493,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     collectForage: (index) => {
-      const now = Date.now();
-      const next = structuredClone(get().game);
-      const spot = next.gather.spots[index];
-      if (!spot || spot.collected) return;
-
-      spot.collected = true;
-      const key = makeItemKey("forage", spot.item, "normal");
-      addInventory(next, key, 1);
-      addCodex(next, key, now);
-      showToast(`${getItemInfo(key).name}을 주웠습니다.`);
-      commit(next);
+      runForageAction(index, true);
     },
 
     startGatherRound: () => {
@@ -413,6 +535,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     useGoldenWater: (index) => {
+      if (!requireNearby({ kind: "plot", index })) return;
       const now = Date.now();
       const next = structuredClone(get().game);
       const plot = next.plots[index];
@@ -439,6 +562,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     useFertilizer: (index) => {
+      if (!requireNearby({ kind: "plot", index })) return;
       const next = structuredClone(get().game);
       const plot = next.plots[index];
       if (!plot?.crop) return;
@@ -503,7 +627,16 @@ export const useGameStore = create<GameStore>((set, get) => {
       applyDailyLogin(fresh, now);
       ensureDailyVisitor(fresh, now);
       writeSave(fresh);
-      set({ game: fresh, now, welcomeSummary: null, harvestEffects: [], careEffects: [] });
+      set({
+        game: fresh,
+        now,
+        welcomeSummary: null,
+        harvestEffects: [],
+        careEffects: [],
+        nearbyInteraction: null,
+        selectedForage: null,
+        playerSpawn: { id: "garden-default", version: 0 },
+      });
       showToast("새 정원을 시작했습니다.");
     },
   };

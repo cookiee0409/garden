@@ -53,6 +53,7 @@ button:focus-visible {
 
 canvas {
   display: block;
+  touch-action: none;
 }
 
 h1,
@@ -316,7 +317,8 @@ h3 {
 
 .plot-tag,
 .forage-tag,
-.floating-gain {
+.floating-gain,
+.portal-tag {
   display: inline-block;
   padding: 3px 8px;
   border-radius: 999px;
@@ -335,6 +337,95 @@ h3 {
 .forage-tag {
   background: rgba(255, 253, 240, 0.88);
   box-shadow: 0 6px 14px rgba(38, 65, 55, 0.14);
+}
+
+.portal-tag {
+  padding: 2px 7px;
+  background: rgba(255, 248, 218, 0.94);
+  color: #624320;
+  font-size: 0.68rem;
+}
+
+.interaction-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background: rgba(37, 49, 47, 0.86);
+  box-shadow: var(--small-shadow);
+  color: #fff;
+  font-weight: 900;
+  transform: translateX(-50%);
+}
+
+.interaction-prompt kbd {
+  display: inline-grid;
+  min-width: 28px;
+  min-height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.touch-controls {
+  position: fixed;
+  inset: auto 18px 18px;
+  z-index: 24;
+  display: none;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.touch-joystick,
+.touch-action-button {
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.touch-joystick {
+  position: relative;
+  width: 118px;
+  height: 118px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 50%;
+  background: rgba(37, 49, 47, 0.34);
+  box-shadow: var(--small-shadow);
+  backdrop-filter: blur(10px);
+}
+
+.touch-joystick__knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--small-shadow);
+}
+
+.touch-action-button {
+  min-width: 126px;
+  min-height: 58px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(37, 49, 47, 0.9);
+  box-shadow: var(--small-shadow);
+  color: #fff;
+  font-weight: 900;
 }
 
 .floating-gain {
@@ -625,6 +716,16 @@ h3 {
 
   .side-panels {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (pointer: coarse) {
+  .touch-controls {
+    display: flex;
+  }
+
+  .interaction-prompt {
+    display: none;
   }
 }
 

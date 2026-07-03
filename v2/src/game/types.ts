@@ -2,6 +2,21 @@ export type QualityId = "normal" | "silver" | "gold" | "wilted";
 export type SceneId = "garden" | "forest";
 export type GrowthStage = "sprout" | "middle" | "ready";
 export type BalanceId = "demo" | "live";
+export type PortalId = "garden-to-forest" | "forest-to-garden";
+export type InteractionActionKind = "unlock" | "plant" | "water" | "wait" | "harvest" | "collect" | "portal";
+export type PlayerSpawnId = "garden-default" | "garden-from-forest" | "forest-from-garden";
+
+export type InteractionTarget =
+  | { kind: "plot"; index: number }
+  | { kind: "forage"; index: number }
+  | { kind: "portal"; id: PortalId; to: SceneId };
+
+export interface InteractionPrompt {
+  target: InteractionTarget;
+  targetKey: string;
+  action: InteractionActionKind;
+  label: string;
+}
 
 export interface CropDef {
   id: string;

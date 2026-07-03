@@ -11,7 +11,9 @@ import {
   makeItemKey,
 } from "./game/logic";
 import { useGameStore } from "./game/store";
+import { requestVirtualInteraction, setVirtualMove } from "./input/playerInput";
 import { GardenScene } from "./scene/GardenScene";
+import { useRef, useState, type PointerEvent } from "react";
 
 function ResourceStrip() {
   const game = useGameStore((store) => store.game);
@@ -90,12 +92,33 @@ function SeedBar() {
 function PlotDetails() {
   const game = useGameStore((store) => store.game);
   const now = useGameStore((store) => store.now);
-  const clickPlot = useGameStore((store) => store.clickPlot);
+  const nearbyInteraction = useGameStore((store) => store.nearbyInteraction);
+  const selectedForage = useGameStore((store) => store.selectedForage);
+  const performPlotAction = useGameStore((store) => store.performPlotAction);
+  const performForageAction = useGameStore((store) => store.performForageAction);
   const useGoldenWater = useGameStore((store) => store.useGoldenWater);
   const useFertilizer = useGameStore((store) => store.useFertilizer);
   const startGatherRound = useGameStore((store) => store.startGatherRound);
+  const isPlotNear = (index: number) => nearbyInteraction?.target.kind === "plot" && nearbyInteraction.target.index === index;
+  const isForageNear = (index: number) => nearbyInteraction?.target.kind === "forage" && nearbyInteraction.target.index === index;
 
   if (game.scene === "forest") {
+    const selectedSpot = selectedForage !== null ? game.gather.spots[selectedForage] : null;
+    if (selectedSpot && !selectedSpot.collected) {
+      const near = isForageNear(selectedForage as number);
+      return (
+        <div className="plot-details">
+          <p className="detail-copy">
+            {getItemInfo(makeItemKey("forage", selectedSpot.item, "normal")).name}
+            {!near ? " · 가까이 가야 합니다" : " · 채집 가능"}
+          </p>
+          <button className="primary-button" type="button" disabled={!near} onClick={() => performForageAction(selectedForage as number)}>
+            채집
+          </button>
+        </div>
+      );
+    }
+
     const allCollected = game.gather.spots.every((spot) => spot.collected);
     const remaining = formatDuration(getGatherRemainingMs(game, now));
     return (
@@ -128,10 +151,11 @@ function PlotDetails() {
 
   if (!plot.unlocked) {
     const unlockCost = PLOT_UNLOCK_COSTS[index] || 0;
+    const near = isPlotNear(index);
     return (
       <div className="plot-details">
-        <p className="detail-copy">잠긴 밭 · 확장 비용 {unlockCost}G</p>
-        <button className="primary-button" type="button" disabled={game.gold < unlockCost} onClick={() => clickPlot(index)}>
+        <p className="detail-copy">잠긴 밭 · 확장 비용 {unlockCost}G{!near ? " · 가까이 가야 합니다" : ""}</p>
+        <button className="primary-button" type="button" disabled={!near || game.gold < unlockCost} onClick={() => performPlotAction(index)}>
           확장
         </button>
       </div>
@@ -141,12 +165,14 @@ function PlotDetails() {
   if (!plot.crop) {
     const crop = CROP_DEFS[game.selectedSeed];
     const count = game.seeds[crop.id] || 0;
+    const near = isPlotNear(index);
     return (
       <div className="plot-details">
         <p className="detail-copy">
           {crop.name} · 성장 {formatDuration(crop.growMs)} · 기본 판매가 {crop.sellPrice}G · 보유 {count}개
+          {!near ? " · 가까이 가야 합니다" : ""}
         </p>
-        <button className="primary-button" type="button" disabled={count <= 0} onClick={() => clickPlot(index)}>
+        <button className="primary-button" type="button" disabled={!near || count <= 0} onClick={() => performPlotAction(index)}>
           심기
         </button>
       </div>
@@ -154,6 +180,7 @@ function PlotDetails() {
   }
 
   const status = getCropStatus(plot, now);
+  const near = isPlotNear(index);
   return (
     <div className="plot-details">
       <p className="detail-copy">
@@ -165,20 +192,21 @@ function PlotDetails() {
           : `남은 시간 ${formatDuration(status.remaining)}`}
         {plot.crop.watered ? " · 물줌" : ""}
         {plot.crop.fertilized ? " · 비료" : ""}
+        {!near ? " · 가까이 가야 합니다" : ""}
       </p>
       {status.isReady ? (
-        <button className="primary-button" type="button" onClick={() => clickPlot(index)}>
+        <button className="primary-button" type="button" disabled={!near} onClick={() => performPlotAction(index)}>
           수확
         </button>
       ) : (
         <>
-          <button className="primary-button secondary" type="button" disabled={plot.crop.watered} onClick={() => clickPlot(index)}>
+          <button className="primary-button secondary" type="button" disabled={!near || plot.crop.watered} onClick={() => performPlotAction(index)}>
             물주기
           </button>
-          <button className="primary-button warning" type="button" disabled={game.goldenWater <= 0} onClick={() => useGoldenWater(index)}>
+          <button className="primary-button warning" type="button" disabled={!near || game.goldenWater <= 0} onClick={() => useGoldenWater(index)}>
             황금 물뿌리개
           </button>
-          <button className="primary-button" type="button" disabled={game.fertilizer <= 0 || plot.crop.fertilized} onClick={() => useFertilizer(index)}>
+          <button className="primary-button" type="button" disabled={!near || game.fertilizer <= 0 || plot.crop.fertilized} onClick={() => useFertilizer(index)}>
             비료 사용
           </button>
         </>
@@ -378,6 +406,73 @@ function HiddenPlotStatus() {
   );
 }
 
+function InteractionPromptOverlay() {
+  const prompt = useGameStore((store) => store.nearbyInteraction);
+  if (!prompt) return null;
+
+  return (
+    <div className="interaction-prompt" aria-live="polite">
+      <kbd>E</kbd>
+      <span>{prompt.label}</span>
+    </div>
+  );
+}
+
+function TouchControls() {
+  const prompt = useGameStore((store) => store.nearbyInteraction);
+  const padRef = useRef<HTMLDivElement>(null);
+  const [knob, setKnob] = useState({ x: 0, y: 0, active: false });
+  const maxRadius = 46;
+
+  const updateMove = (clientX: number, clientY: number) => {
+    const rect = padRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const rawX = clientX - centerX;
+    const rawY = clientY - centerY;
+    const distance = Math.hypot(rawX, rawY);
+    const scale = distance > maxRadius ? maxRadius / distance : 1;
+    const x = rawX * scale;
+    const y = rawY * scale;
+    setKnob({ x, y, active: true });
+    setVirtualMove(x / maxRadius, y / maxRadius);
+  };
+
+  const stopMove = () => {
+    setKnob({ x: 0, y: 0, active: false });
+    setVirtualMove(0, 0);
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateMove(event.clientX, event.clientY);
+  };
+
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!knob.active) return;
+    updateMove(event.clientX, event.clientY);
+  };
+
+  return (
+    <div className="touch-controls" aria-label="모바일 조작">
+      <div
+        ref={padRef}
+        className="touch-joystick"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={stopMove}
+        onPointerCancel={stopMove}
+      >
+        <span className="touch-joystick__knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
+      </div>
+      <button className="touch-action-button" type="button" disabled={!prompt} onClick={requestVirtualInteraction}>
+        {prompt ? prompt.label : "대상 없음"}
+      </button>
+    </div>
+  );
+}
+
 function SceneSection() {
   const now = useGameStore((store) => store.now);
   const night = isNightTime(now);
@@ -387,10 +482,12 @@ function SceneSection() {
       <SceneToolbar />
       <section className={`scene-frame ${night ? "scene-frame--night" : ""}`} aria-label="3D 정원">
         <GardenScene />
+        <InteractionPromptOverlay />
       </section>
       <SeedBar />
       <PlotDetails />
       <HiddenPlotStatus />
+      <TouchControls />
     </section>
   );
 }
