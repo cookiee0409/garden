@@ -32,6 +32,25 @@ import {
 } from "./layout";
 import { PlayerModel } from "./PlayerModel";
 
+const GARDEN_INTERACTION_TARGETS: InteractionTarget[] = [
+  ...Array.from({ length: PLOT_COUNT }, (_, index) => ({ kind: "plot", index }) as InteractionTarget),
+  PORTALS.garden.target,
+];
+
+const PLOT_COLLIDERS = Array.from({ length: PLOT_COUNT }, (_, index) => {
+  const [x, z] = plotPosition(index);
+  return { x, z };
+});
+
+function buildForestInteractionTargets(spots: GameState["gather"]["spots"]): InteractionTarget[] {
+  const targets: InteractionTarget[] = [];
+  spots.forEach((spot, index) => {
+    if (!spot.collected) targets.push({ kind: "forage", index });
+  });
+  targets.push(PORTALS.forest.target);
+  return targets;
+}
+
 function isTextInputTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
@@ -84,12 +103,16 @@ function resolveCollisions(position: Vector3, scene: SceneId) {
   clampToIsland(position);
 
   if (scene === "garden") {
-    Array.from({ length: PLOT_COUNT }, (_, index) => plotPosition(index)).forEach(([x, z]) => {
-      resolveAabbCollision(position, x, z, PLOT_HALF_SIZE, PLOT_HALF_SIZE);
-    });
-    GARDEN_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+    for (const plot of PLOT_COLLIDERS) {
+      resolveAabbCollision(position, plot.x, plot.z, PLOT_HALF_SIZE, PLOT_HALF_SIZE);
+    }
+    for (const tree of GARDEN_TREE_COLLIDERS) {
+      resolveCircleCollision(position, tree.x, tree.z, tree.radius);
+    }
   } else {
-    FOREST_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
+    for (const tree of FOREST_TREE_COLLIDERS) {
+      resolveCircleCollision(position, tree.x, tree.z, tree.radius);
+    }
   }
 
   clampToIsland(position);
@@ -102,32 +125,18 @@ function targetPosition(target: InteractionTarget): [number, number] {
   return [portal.position[0], portal.position[2]];
 }
 
-function nearestInteraction(game: GameState, scene: SceneId, position: Vector3, now: number): InteractionPrompt | null {
-  const targets: InteractionTarget[] =
-    scene === "garden"
-      ? [
-          ...game.plots.map((_, index) => ({ kind: "plot", index }) as InteractionTarget),
-          PORTALS.garden.target,
-        ]
-      : [
-          ...game.gather.spots.reduce<InteractionTarget[]>((items, spot, index) => {
-            if (!spot.collected) items.push({ kind: "forage", index });
-            return items;
-          }, []),
-          PORTALS.forest.target,
-        ];
-
+function nearestInteraction(game: GameState, targets: InteractionTarget[], position: Vector3, now: number): InteractionPrompt | null {
   let nearestTarget: InteractionTarget | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
-  targets.forEach((target) => {
+  for (const target of targets) {
     const [x, z] = targetPosition(target);
     const distance = Math.hypot(position.x - x, position.z - z);
-    if (distance > INTERACTION_RADIUS) return;
+    if (distance > INTERACTION_RADIUS) continue;
     if (distance < nearestDistance) {
       nearestTarget = target;
       nearestDistance = distance;
     }
-  });
+  }
 
   return nearestTarget ? getInteractionPrompt(game, nearestTarget, now) : null;
 }
@@ -135,6 +144,7 @@ function nearestInteraction(game: GameState, scene: SceneId, position: Vector3, 
 function PlayerController() {
   const scene = useGameStore((store) => store.game.scene);
   const game = useGameStore((store) => store.game);
+  const gatherSpots = useGameStore((store) => store.game.gather.spots);
   const now = useGameStore((store) => store.now);
   const spawn = useGameStore((store) => store.playerSpawn);
   const setNearbyInteraction = useGameStore((store) => store.setNearbyInteraction);
@@ -148,8 +158,11 @@ function PlayerController() {
   const nearbyRef = useRef<InteractionPrompt | null>(null);
   const walkingRef = useRef(false);
   const cameraTarget = useRef(new Vector3(0, 0.4, 0));
+  const cameraLookTarget = useRef(new Vector3());
+  const cameraPositionTarget = useRef(new Vector3());
   const cameraOffset = useRef(new Vector3(...CAMERA_OFFSET));
   const nextPosition = useRef(new Vector3());
+  const interactionTargets = useRef<InteractionTarget[]>(GARDEN_INTERACTION_TARGETS);
   const lastVirtualInteraction = useRef(virtualInteraction.requestId);
 
   useEffect(() => {
@@ -163,6 +176,10 @@ function PlayerController() {
   useEffect(() => {
     sceneRef.current = scene;
   }, [scene]);
+
+  useEffect(() => {
+    interactionTargets.current = scene === "garden" ? GARDEN_INTERACTION_TARGETS : buildForestInteractionTargets(gatherSpots);
+  }, [gatherSpots, scene]);
 
   useEffect(() => {
     const position = SPAWN_POSITIONS[spawn.id];
@@ -236,13 +253,15 @@ function PlayerController() {
       performNearbyInteraction();
     }
 
-    const prompt = nearestInteraction(gameRef.current, sceneRef.current, player.current.position, nowRef.current);
+    const prompt = nearestInteraction(gameRef.current, interactionTargets.current, player.current.position, nowRef.current);
     nearbyRef.current = prompt;
     setNearbyInteraction(prompt);
 
-    cameraTarget.current.lerp(new Vector3(player.current.position.x, 0.42, player.current.position.z), 0.08);
+    cameraLookTarget.current.set(player.current.position.x, 0.42, player.current.position.z);
+    cameraTarget.current.lerp(cameraLookTarget.current, 0.08);
     clampToIsland(cameraTarget.current);
-    state.camera.position.lerp(cameraTarget.current.clone().add(cameraOffset.current), 0.08);
+    cameraPositionTarget.current.copy(cameraTarget.current).add(cameraOffset.current);
+    state.camera.position.lerp(cameraPositionTarget.current, 0.08);
     state.camera.lookAt(cameraTarget.current);
   });
 
