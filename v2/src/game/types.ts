@@ -1,6 +1,7 @@
 export type QualityId = "normal" | "silver" | "gold" | "wilted";
 export type SceneId = "garden" | "forest";
 export type GrowthStage = "sprout" | "middle" | "ready";
+export type BalanceId = "demo" | "live";
 
 export interface CropDef {
   id: string;
@@ -42,6 +43,7 @@ export interface CropState {
   plantedAt: number;
   boostMs: number;
   watered: boolean;
+  fertilized: boolean;
 }
 
 export interface PlotState {
@@ -72,6 +74,7 @@ export interface DailyVisitor {
 
 export interface GameState {
   version: number;
+  balanceId: BalanceId;
   gold: number;
   selectedSeed: string;
   selectedPlot: number | null;
@@ -84,6 +87,7 @@ export interface GameState {
   streak: number;
   lastLoginDate: string | null;
   goldenWater: number;
+  fertilizer: number;
   gather: GatherState;
   dailyVisitor: DailyVisitor | null;
   createdAt: number;
@@ -113,4 +117,26 @@ export interface ItemInfo {
 export interface CodexEntry {
   key: string;
   label: string;
+}
+
+export interface WelcomeSummary {
+  offlineMs: number;
+  readyCrops: number;
+  wiltedCrops: number;
+  gatherRefilled: boolean;
+  dailyReward: boolean;
+}
+
+export interface HarvestEffect {
+  id: number;
+  plotIndex: number;
+  cropType: string;
+  quality: QualityId;
+  label: string;
+}
+
+export interface CareEffect {
+  id: number;
+  plotIndex: number;
+  kind: "water" | "fertilizer";
 }

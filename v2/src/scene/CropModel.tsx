@@ -134,6 +134,55 @@ function WatermelonPlant({ mature, wilted }: { mature: boolean; wilted: boolean 
   );
 }
 
+function MoonMushroomPlant({ mature, wilted }: { mature: boolean; wilted: boolean }) {
+  const stem = wilted ? WILTED_FOLIAGE : "#d9d3c2";
+  const cap = wilted ? WILTED_FRUIT : "#8bb7ff";
+  return (
+    <group>
+      <mesh position={[0, 0.18, 0]}>
+        <cylinderGeometry args={[0.07, 0.1, mature ? 0.36 : 0.24, 8]} />
+        <meshStandardMaterial color={stem} />
+      </mesh>
+      <mesh position={[0, mature ? 0.42 : 0.3, 0]} scale={[1.15, 0.58, 1.15]}>
+        <sphereGeometry args={[mature ? 0.24 : 0.16, 12, 8]} />
+        <meshStandardMaterial color={cap} emissive={wilted ? "#000000" : "#5b88e8"} emissiveIntensity={mature && !wilted ? 0.45 : 0.15} />
+      </mesh>
+      {mature && (
+        <mesh position={[0.16, 0.3, 0.08]} scale={[0.72, 0.5, 0.72]}>
+          <sphereGeometry args={[0.11, 10, 8]} />
+          <meshStandardMaterial color={wilted ? WILTED_FRUIT : "#c8ddff"} emissive={wilted ? "#000000" : "#6ca5ff"} emissiveIntensity={0.22} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+function RainbowFlowerPlant({ mature, wilted }: { mature: boolean; wilted: boolean }) {
+  const colors = wilted ? [WILTED_FRUIT, WILTED_FRUIT, WILTED_FRUIT, WILTED_FRUIT, WILTED_FRUIT, WILTED_FRUIT] : ["#ef6d79", "#f3b34c", "#f1df64", "#69bf75", "#69a7ee", "#a982dd"];
+  return (
+    <group>
+      <mesh position={[0, 0.3, 0]}>
+        <cylinderGeometry args={[0.026, 0.04, mature ? 0.62 : 0.42, 6]} />
+        <meshStandardMaterial color={wilted ? WILTED_FOLIAGE : "#4f9f5c"} />
+      </mesh>
+      {colors.map((color, index) => {
+        const angle = (index / colors.length) * Math.PI * 2;
+        const radius = mature ? 0.16 : 0.1;
+        return (
+          <mesh key={index} position={[Math.cos(angle) * radius, mature ? 0.64 : 0.48, Math.sin(angle) * radius]} scale={[1, 0.62, 1]}>
+            <sphereGeometry args={[mature ? 0.1 : 0.07, 10, 8]} />
+            <meshStandardMaterial color={color} />
+          </mesh>
+        );
+      })}
+      <mesh position={[0, mature ? 0.64 : 0.48, 0]}>
+        <sphereGeometry args={[mature ? 0.08 : 0.06, 10, 8]} />
+        <meshStandardMaterial color={wilted ? WILTED_FRUIT : "#f7e28f"} />
+      </mesh>
+    </group>
+  );
+}
+
 export function CropModel({ type, stage, wilted }: CropModelProps) {
   if (stage === "sprout") return <Sprout wilted={wilted} />;
 
@@ -145,6 +194,8 @@ export function CropModel({ type, stage, wilted }: CropModelProps) {
   else if (type === "strawberry") plant = <StrawberryPlant mature={mature} wilted={wilted} />;
   else if (type === "sunflower") plant = <SunflowerPlant mature={mature} wilted={wilted} />;
   else if (type === "watermelon") plant = <WatermelonPlant mature={mature} wilted={wilted} />;
+  else if (type === "moon_mushroom") plant = <MoonMushroomPlant mature={mature} wilted={wilted} />;
+  else if (type === "rainbow_flower") plant = <RainbowFlowerPlant mature={mature} wilted={wilted} />;
   else plant = <Sprout wilted={wilted} />;
 
   return <group scale={scale}>{plant}</group>;

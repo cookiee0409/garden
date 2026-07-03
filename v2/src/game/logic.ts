@@ -1,5 +1,7 @@
 import {
+  BALANCE_ID,
   CROP_DEFS,
+  CURRENT_SAVE_VERSION,
   FORAGE_DEFS,
   FORAGE_POSITIONS,
   GATHER_REFILL_MS,
@@ -21,7 +23,8 @@ import type {
 
 export function createDefaultState(now = Date.now()): GameState {
   return {
-    version: 1,
+    version: CURRENT_SAVE_VERSION,
+    balanceId: BALANCE_ID,
     gold: 120,
     selectedSeed: "tomato",
     selectedPlot: null,
@@ -32,6 +35,8 @@ export function createDefaultState(now = Date.now()): GameState {
       strawberry: 0,
       sunflower: 0,
       watermelon: 0,
+      moon_mushroom: 0,
+      rainbow_flower: 0,
     },
     plots: Array.from({ length: 9 }, (_, index) => ({
       id: index,
@@ -44,6 +49,7 @@ export function createDefaultState(now = Date.now()): GameState {
     streak: 0,
     lastLoginDate: null,
     goldenWater: 0,
+    fertilizer: 0,
     gather: {
       lastRefillAt: now,
       charges: 0,
@@ -63,6 +69,7 @@ export function sanitizeCrop(crop: Partial<CropState> | null | undefined, now = 
     plantedAt: Math.min(plantedAt, now),
     boostMs: typeof crop.boostMs === "number" ? crop.boostMs : 0,
     watered: Boolean(crop.watered),
+    fertilized: Boolean(crop.fertilized),
   };
 }
 
@@ -100,7 +107,17 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
   if (typeof merged.gather.lastRefillAt !== "number") merged.gather.lastRefillAt = now;
   if (typeof merged.gold !== "number") merged.gold = base.gold;
   if (typeof merged.goldenWater !== "number") merged.goldenWater = 0;
+  if (typeof merged.fertilizer !== "number") merged.fertilizer = 0;
   if (typeof merged.streak !== "number") merged.streak = 0;
+  if (merged.balanceId !== BALANCE_ID) {
+    merged.plots.forEach((plot) => {
+      if (!plot.crop) return;
+      const crop = CROP_DEFS[plot.crop.type];
+      plot.crop.boostMs = crop.growMs;
+    });
+    merged.balanceId = BALANCE_ID;
+  }
+  merged.version = CURRENT_SAVE_VERSION;
 
   return merged;
 }
@@ -193,9 +210,9 @@ export function getCropStatus(plot: PlotState, now = Date.now()): CropStatus {
   return { def, elapsed, progress, remaining, matureAt, wilted, stage, isReady: progress >= 1 };
 }
 
-export function rollQuality(hasWaterBonus: boolean): QualityId {
-  const goldChance = hasWaterBonus ? 0.18 : 0.08;
-  const silverChance = hasWaterBonus ? 0.34 : 0.22;
+export function rollQuality(hasWaterBonus: boolean, hasFertilizerBonus = false): QualityId {
+  const goldChance = (hasWaterBonus ? 0.18 : 0.08) + (hasFertilizerBonus ? 0.18 : 0);
+  const silverChance = (hasWaterBonus ? 0.34 : 0.22) + (hasFertilizerBonus ? 0.18 : 0);
   const roll = Math.random();
   if (roll < goldChance) return "gold";
   if (roll < goldChance + silverChance) return "silver";
