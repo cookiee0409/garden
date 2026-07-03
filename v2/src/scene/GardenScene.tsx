@@ -3,61 +3,34 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { Vector3 } from "three";
 import type { Group, Mesh } from "three";
-import { FORAGE_DEFS, FORAGE_POSITIONS, PLOT_UNLOCK_COSTS } from "../game/data";
+import { FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "../game/data";
 import { getInteractionPrompt } from "../game/interactions";
 import { formatDuration, getCropStatus, getGatherRemainingMs, isNightTime } from "../game/logic";
 import { useGameStore } from "../game/store";
-import type { CareEffect, GameState, HarvestEffect as HarvestEffectType, InteractionPrompt, InteractionTarget, PlayerSpawnId, SceneId } from "../game/types";
+import type { CareEffect, GameState, HarvestEffect as HarvestEffectType, InteractionPrompt, InteractionTarget, SceneId } from "../game/types";
 import { virtualInteraction, virtualMove } from "../input/playerInput";
 import { CropModel } from "./CropModel";
+import {
+  CAMERA_OFFSET,
+  FOREST_ISLAND_GEOMETRY,
+  FOREST_TREES,
+  FOREST_TREE_COLLIDERS,
+  GARDEN_ISLAND_GEOMETRY,
+  GARDEN_TREES,
+  GARDEN_TREE_COLLIDERS,
+  INITIAL_CAMERA_POSITION,
+  INTERACTION_RADIUS,
+  ISLAND_RADIUS,
+  PLAYER_RADIUS,
+  PLAYER_SPEED,
+  PLOT_COUNT,
+  PLOT_HALF_SIZE,
+  PORTALS,
+  SPAWN_POSITIONS,
+  forestPosition,
+  plotPosition,
+} from "./layout";
 import { PlayerModel } from "./PlayerModel";
-
-function plotPosition(index: number): [number, number] {
-  const row = Math.floor(index / 3);
-  const col = index % 3;
-  return [(col - 1) * 1.3, (row - 1) * 1.3];
-}
-
-function forestPosition(index: number): [number, number] {
-  const position = FORAGE_POSITIONS[index % FORAGE_POSITIONS.length];
-  return [(position.x / 100 - 0.5) * 5.6, (position.y / 100 - 0.5) * 4.8];
-}
-
-const PLAYER_SPEED = 2.2;
-const PLAYER_RADIUS = 0.24;
-const ISLAND_RADIUS = 3.05;
-const INTERACTION_RADIUS = 0.9;
-const CAMERA_OFFSET = new Vector3(5.2, 6.2, 5.2);
-
-const SPAWN_POSITIONS: Record<PlayerSpawnId, [number, number, number]> = {
-  "garden-default": [0, 0.05, 2.12],
-  "garden-from-forest": [0, 0.05, 2.12],
-  "forest-from-garden": [0, 0.05, -2.12],
-};
-
-const PORTALS: Record<SceneId, { target: InteractionTarget; position: [number, number, number]; sign: string }> = {
-  garden: {
-    target: { kind: "portal", id: "garden-to-forest", to: "forest" },
-    position: [0, 0, 2.72],
-    sign: "숲",
-  },
-  forest: {
-    target: { kind: "portal", id: "forest-to-garden", to: "garden" },
-    position: [0, 0, -2.72],
-    sign: "정원",
-  },
-};
-
-const GARDEN_TREE_COLLIDERS = [
-  { x: -2.55, z: -1.75, radius: 0.28 },
-  { x: 2.55, z: 1.55, radius: 0.28 },
-];
-const FOREST_TREE_COLLIDERS = [
-  { x: -2.45, z: -1.65, radius: 0.3 },
-  { x: 2.38, z: -1.2, radius: 0.28 },
-  { x: -2.1, z: 1.65, radius: 0.25 },
-  { x: 2.2, z: 1.4, radius: 0.29 },
-];
 
 function isTextInputTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
@@ -111,8 +84,8 @@ function resolveCollisions(position: Vector3, scene: SceneId) {
   clampToIsland(position);
 
   if (scene === "garden") {
-    Array.from({ length: 9 }, (_, index) => plotPosition(index)).forEach(([x, z]) => {
-      resolveAabbCollision(position, x, z, 0.55, 0.55);
+    Array.from({ length: PLOT_COUNT }, (_, index) => plotPosition(index)).forEach(([x, z]) => {
+      resolveAabbCollision(position, x, z, PLOT_HALF_SIZE, PLOT_HALF_SIZE);
     });
     GARDEN_TREE_COLLIDERS.forEach((tree) => resolveCircleCollision(position, tree.x, tree.z, tree.radius));
   } else {
@@ -175,6 +148,7 @@ function PlayerController() {
   const nearbyRef = useRef<InteractionPrompt | null>(null);
   const walkingRef = useRef(false);
   const cameraTarget = useRef(new Vector3(0, 0.4, 0));
+  const cameraOffset = useRef(new Vector3(...CAMERA_OFFSET));
   const nextPosition = useRef(new Vector3());
   const lastVirtualInteraction = useRef(virtualInteraction.requestId);
 
@@ -268,7 +242,7 @@ function PlayerController() {
 
     cameraTarget.current.lerp(new Vector3(player.current.position.x, 0.42, player.current.position.z), 0.08);
     clampToIsland(cameraTarget.current);
-    state.camera.position.lerp(cameraTarget.current.clone().add(CAMERA_OFFSET), 0.08);
+    state.camera.position.lerp(cameraTarget.current.clone().add(cameraOffset.current), 0.08);
     state.camera.lookAt(cameraTarget.current);
   });
 
@@ -415,17 +389,18 @@ function GardenWorld() {
   return (
     <>
       <mesh position={[0, -0.15, 0]}>
-        <cylinderGeometry args={[3.4, 3.8, 0.5, 8]} />
+        <cylinderGeometry args={GARDEN_ISLAND_GEOMETRY.top} />
         <meshStandardMaterial color="#7cc98e" flatShading />
       </mesh>
       <mesh position={[0, -0.42, 0]}>
-        <cylinderGeometry args={[3.8, 3.2, 0.4, 8]} />
+        <cylinderGeometry args={GARDEN_ISLAND_GEOMETRY.bottom} />
         <meshStandardMaterial color="#a9724a" flatShading />
       </mesh>
-      <Tree position={[-2.55, 0, -1.75]} scale={0.82} />
-      <Tree position={[2.55, 0, 1.55]} scale={0.76} />
+      {GARDEN_TREES.map((tree) => (
+        <Tree key={`${tree.position[0]}:${tree.position[2]}`} position={tree.position} scale={tree.scale} />
+      ))}
       <PortalSign scene="garden" />
-      {Array.from({ length: 9 }, (_, index) => (
+      {Array.from({ length: PLOT_COUNT }, (_, index) => (
         <PlotTile key={index} index={index} />
       ))}
       {harvestEffects.map((effect) => (
@@ -628,17 +603,16 @@ function ForestWorld() {
   return (
     <>
       <mesh position={[0, -0.18, 0]}>
-        <cylinderGeometry args={[3.5, 3.9, 0.48, 9]} />
+        <cylinderGeometry args={FOREST_ISLAND_GEOMETRY.top} />
         <meshStandardMaterial color="#5fae69" flatShading />
       </mesh>
       <mesh position={[0, -0.45, 0]}>
-        <cylinderGeometry args={[3.9, 3.3, 0.4, 9]} />
+        <cylinderGeometry args={FOREST_ISLAND_GEOMETRY.bottom} />
         <meshStandardMaterial color="#7b5a43" flatShading />
       </mesh>
-      <Tree position={[-2.45, 0.0, -1.65]} scale={1.12} />
-      <Tree position={[2.38, 0.0, -1.2]} scale={0.95} />
-      <Tree position={[-2.1, 0.0, 1.65]} scale={0.82} />
-      <Tree position={[2.2, 0.0, 1.4]} scale={1.02} />
+      {FOREST_TREES.map((tree) => (
+        <Tree key={`${tree.position[0]}:${tree.position[2]}`} position={tree.position} scale={tree.scale} />
+      ))}
       <PortalSign scene="forest" />
       {game.gather.spots.map((spot, index) => (
         <ForageSpot index={index} key={spot.id} />
@@ -683,7 +657,7 @@ export function GardenScene() {
 
   return (
     <Canvas
-      camera={{ position: [5.2, 6.2, 5.2], fov: 40 }}
+      camera={{ position: INITIAL_CAMERA_POSITION, fov: 40 }}
       dpr={[1, 1.5]}
       onCreated={({ camera }) => camera.lookAt(0, 0, 0)}
     >
