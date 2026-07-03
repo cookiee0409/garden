@@ -64,3 +64,87 @@ h1 {
   font-size: 0.92rem;
   line-height: 1.55;
 }
+
+.seed-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(55, 78, 71, 0.16);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.seed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #fff;
+  color: #25312f;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.seed-chip.active {
+  border-color: #f2bc46;
+  background: #fff8d8;
+}
+
+.seed-chip .muted {
+  color: #687872;
+  font-size: 0.8rem;
+}
+
+.seed-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+
+.seed-dot--tomato { background: #e95a5f; }
+.seed-dot--carrot { background: #f18842; }
+.seed-dot--strawberry { background: #df5271; }
+.seed-dot--sunflower { background: #f2c94c; }
+.seed-dot--watermelon { background: #2f9b66; }
+
+.plot-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #25312f;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.plot-tag--ready {
+  background: #f2bc46;
+  color: #4b2c13;
+}
+
+.toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 36px));
+}
+
+.toast {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 16px;
+  background: rgba(37, 49, 47, 0.92);
+  color: #fff;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}

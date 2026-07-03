@@ -1,69 +1,79 @@
-import { Canvas } from "@react-three/fiber";
 import { useGameStore } from "./game/store";
-import { PLOT_UNLOCK_COSTS } from "./game/data";
-import { getCropStatus } from "./game/logic";
+import { CROP_DEFS } from "./game/data";
+import { GardenScene } from "./scene/GardenScene";
 
-function PlotTile({ index }: { index: number }) {
-  const plot = useGameStore((store) => store.game.plots[index]);
-  const row = Math.floor(index / 3);
-  const col = index % 3;
-  const x = (col - 1) * 1.3;
-  const z = (row - 1) * 1.3;
-
-  let color = "#b6c7bd";
-  if (plot.unlocked) color = plot.crop ? "#7a4c30" : "#9b6a4c";
-  if (plot.crop && getCropStatus(plot).isReady) color = "#f2bc46";
+function ResourceStrip() {
+  const game = useGameStore((store) => store.game);
+  const unlocked = game.plots.filter((plot) => plot.unlocked).length;
+  const seedCount = Object.values(game.seeds).reduce((sum, value) => sum + value, 0);
 
   return (
-    <mesh position={[x, 0.1, z]}>
-      <boxGeometry args={[1.1, 0.2, 1.1]} />
-      <meshStandardMaterial color={color} />
-    </mesh>
+    <div className="resource-strip">
+      <span className="resource-pill">골드 <strong>{game.gold}G</strong></span>
+      <span className="resource-pill">씨앗 <strong>{seedCount}개</strong></span>
+      <span className="resource-pill">밭 <strong>{unlocked}/9</strong></span>
+      <span className="resource-pill">출석 <strong>{game.streak}일</strong></span>
+      <span className="resource-pill">물뿌리개 <strong>{game.goldenWater}회</strong></span>
+    </div>
   );
 }
 
-function GardenScene() {
+function SeedBar() {
+  const seeds = useGameStore((store) => store.game.seeds);
+  const selectedSeed = useGameStore((store) => store.game.selectedSeed);
+  const selectSeed = useGameStore((store) => store.selectSeed);
+
   return (
-    <Canvas camera={{ position: [5, 6, 5], fov: 42 }} shadows>
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[4, 8, 4]} intensity={1.1} />
-      <mesh position={[0, -0.15, 0]}>
-        <cylinderGeometry args={[3.4, 3.8, 0.5, 8]} />
-        <meshStandardMaterial color="#7cc98e" />
-      </mesh>
-      {Array.from({ length: 9 }, (_, index) => (
-        <PlotTile key={index} index={index} />
+    <div className="seed-bar" aria-label="씨앗 선택">
+      {Object.values(CROP_DEFS).map((crop) => {
+        const active = selectedSeed === crop.id;
+        return (
+          <button
+            key={crop.id}
+            type="button"
+            className={`seed-chip ${active ? "active" : ""}`}
+            aria-pressed={active}
+            onClick={() => selectSeed(crop.id)}
+          >
+            <span className={`seed-dot seed-dot--${crop.className}`} aria-hidden="true" />
+            <span>{crop.name}</span>
+            <span className="muted">{seeds[crop.id] || 0}개</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToastStack() {
+  const toasts = useGameStore((store) => store.toasts);
+  return (
+    <div className="toast-stack" aria-live="assertive">
+      {toasts.map((toast) => (
+        <div key={toast.id} className="toast">
+          {toast.message}
+        </div>
       ))}
-    </Canvas>
+    </div>
   );
 }
 
 export default function App() {
-  const game = useGameStore((store) => store.game);
-  const unlocked = game.plots.filter((plot) => plot.unlocked).length;
-  const seedCount = Object.values(game.seeds).reduce((sum, value) => sum + value, 0);
-  const nextUnlockCost = PLOT_UNLOCK_COSTS[unlocked] ?? null;
-
   return (
     <main className="app-shell">
       <header className="topbar">
         <h1>미니 정원 v2</h1>
-        <div className="resource-strip">
-          <span className="resource-pill">골드 <strong>{game.gold}G</strong></span>
-          <span className="resource-pill">씨앗 <strong>{seedCount}개</strong></span>
-          <span className="resource-pill">밭 <strong>{unlocked}/9</strong></span>
-          <span className="resource-pill">출석 <strong>{game.streak}일</strong></span>
-          <span className="resource-pill">물뿌리개 <strong>{game.goldenWater}회</strong></span>
-        </div>
+        <ResourceStrip />
       </header>
       <section className="scene-frame" aria-label="3D 정원">
         <GardenScene />
       </section>
+      <SeedBar />
       <p className="hint">
-        REQ-20 세팅 확인용 화면입니다. 기존 저장(SAVE_KEY)을 읽어 위 수치를 표시하고,
-        아래 3D 씬은 밭 상태(잠김/빈 밭/재배 중/수확 가능)를 색으로 보여줍니다.
-        {nextUnlockCost !== null && ` 다음 밭 확장 비용은 ${nextUnlockCost}G입니다.`}
+        씨앗을 고른 뒤 빈 밭을 누르면 심고, 다 자란 작물(반짝이는 표시)을 누르면 수확합니다.
+        잠긴 밭은 표시된 골드를 내고 바로 확장됩니다.
       </p>
+      <ToastStack />
     </main>
   );
 }
