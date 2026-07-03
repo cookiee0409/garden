@@ -1,0 +1,5 @@
+{
+  "installCommand": "cd v2 && npm ci",
+  "buildCommand": "cd v2 && npm run build",
+  "outputDirectory": "v2/dist"
+}
