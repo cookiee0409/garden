@@ -35,6 +35,7 @@ import type {
 } from "./types";
 
 const WELCOME_BACK_THRESHOLD_MS = 30 * 60 * 1000;
+const SCENE_INTERACTION_COOLDOWN_MS = 500;
 
 function readSave(): Partial<GameState> | null {
   try {
@@ -103,6 +104,7 @@ interface GameStore {
   nearbyInteraction: InteractionPrompt | null;
   selectedForage: number | null;
   playerSpawn: { id: PlayerSpawnId; version: number };
+  interactionCooldownUntil: number;
   showToast: (message: string) => void;
   dismissWelcome: () => void;
   switchScene: (scene: SceneId) => void;
@@ -186,6 +188,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       nearbyInteraction: null,
       selectedForage: null,
       playerSpawn: { id: spawnForScene(scene), version: store.playerSpawn.version + 1 },
+      interactionCooldownUntil: Date.now() + SCENE_INTERACTION_COOLDOWN_MS,
     }));
   };
 
@@ -352,6 +355,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     nearbyInteraction: null,
     selectedForage: null,
     playerSpawn: { id: "garden-default", version: 0 },
+    interactionCooldownUntil: 0,
     showToast,
 
     dismissWelcome: () => {
@@ -409,6 +413,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
 
     performNearbyInteraction: () => {
+      if (Date.now() < get().interactionCooldownUntil) return;
       const prompt = get().nearbyInteraction;
       if (!prompt) return;
       runTargetInteraction(prompt.target, true);
@@ -636,6 +641,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         nearbyInteraction: null,
         selectedForage: null,
         playerSpawn: { id: "garden-default", version: 0 },
+        interactionCooldownUntil: 0,
       });
       showToast("새 정원을 시작했습니다.");
     },
