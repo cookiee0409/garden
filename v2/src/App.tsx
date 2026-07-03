@@ -1,12 +1,21 @@
-import { BALANCE_LABEL, CODEX_REWARDS, CROP_DEFS, FERTILIZER_RECIPE, PLOT_UNLOCK_COSTS } from "./game/data";
+import { BALANCE_LABEL, CODEX_REWARDS, CROP_DEFS, DECOR_DEFS, FERTILIZER_RECIPE, PLOT_UNLOCK_COSTS } from "./game/data";
 import {
+  findWiltedInventoryKey,
   findInventoryCropKey,
   formatDuration,
+  getCompostRemainingMs,
   getCodexCount,
+  getCoziness,
   getCropStatus,
   getGatherRemainingMs,
   getItemInfo,
   getPossibleCodexEntries,
+  getSeason,
+  getSeasonName,
+  getVisitorBonus,
+  getWeather,
+  getWeatherName,
+  isDecorationPlaced,
   isNightTime,
   makeItemKey,
 } from "./game/logic";
@@ -17,9 +26,12 @@ import { useRef, useState, type PointerEvent } from "react";
 
 function ResourceStrip() {
   const game = useGameStore((store) => store.game);
+  const now = useGameStore((store) => store.now);
   const unlocked = game.plots.filter((plot) => plot.unlocked).length;
   const seedCount = Object.values(game.seeds).reduce((sum, value) => sum + value, 0);
   const cropCount = game.plots.filter((plot) => plot.crop).length;
+  const season = getSeason(now);
+  const weather = getWeather(now);
 
   return (
     <div className="resource-strip">
@@ -30,6 +42,8 @@ function ResourceStrip() {
       <span className="resource-pill">출석 <strong>{game.streak}일</strong></span>
       <span className="resource-pill">물뿌리개 <strong>{game.goldenWater}회</strong></span>
       <span className="resource-pill">비료 <strong>{game.fertilizer}개</strong></span>
+      <span className="resource-pill">아늑함 <strong>{getCoziness(game)}</strong></span>
+      <span className="resource-pill">날씨 <strong>{getSeasonName(season)} · {getWeatherName(weather)}</strong></span>
     </div>
   );
 }
@@ -94,13 +108,32 @@ function PlotDetails() {
   const now = useGameStore((store) => store.now);
   const nearbyInteraction = useGameStore((store) => store.nearbyInteraction);
   const selectedForage = useGameStore((store) => store.selectedForage);
+  const placementDecorationId = useGameStore((store) => store.placementDecorationId);
   const performPlotAction = useGameStore((store) => store.performPlotAction);
   const performForageAction = useGameStore((store) => store.performForageAction);
   const useGoldenWater = useGameStore((store) => store.useGoldenWater);
   const useFertilizer = useGameStore((store) => store.useFertilizer);
   const startGatherRound = useGameStore((store) => store.startGatherRound);
+  const cancelDecorationPlacement = useGameStore((store) => store.cancelDecorationPlacement);
+  const pickupDecoration = useGameStore((store) => store.pickupDecoration);
+  const addWiltedToCompost = useGameStore((store) => store.addWiltedToCompost);
+  const collectCompost = useGameStore((store) => store.collectCompost);
   const isPlotNear = (index: number) => nearbyInteraction?.target.kind === "plot" && nearbyInteraction.target.index === index;
   const isForageNear = (index: number) => nearbyInteraction?.target.kind === "forage" && nearbyInteraction.target.index === index;
+
+  if (placementDecorationId) {
+    const decoration = game.decorations.find((item) => item.id === placementDecorationId);
+    return (
+      <div className="plot-details">
+        <p className="detail-copy">
+          {decoration ? `${DECOR_DEFS[decoration.type].name} 배치 중` : "장식 배치 중"} · E 또는 터치 버튼으로 설치
+        </p>
+        <button className="primary-button secondary" type="button" onClick={cancelDecorationPlacement}>
+          취소
+        </button>
+      </div>
+    );
+  }
 
   if (game.scene === "forest") {
     const selectedSpot = selectedForage !== null ? game.gather.spots[selectedForage] : null;
@@ -134,6 +167,63 @@ function PlotDetails() {
           onClick={startGatherRound}
         >
           새 포인트 펼치기
+        </button>
+      </div>
+    );
+  }
+
+  const nearbyTarget = nearbyInteraction?.target;
+
+  if (nearbyTarget?.kind === "decoration") {
+    const decoration = game.decorations.find((item) => item.id === nearbyTarget.id);
+    if (decoration) {
+      const def = DECOR_DEFS[decoration.type];
+      return (
+        <div className="plot-details">
+          <p className="detail-copy">
+            {def.name} · 아늑함 {def.cozy} · 설치된 장식
+          </p>
+          <button className="primary-button secondary" type="button" onClick={() => pickupDecoration(decoration.id)}>
+            회수
+          </button>
+        </div>
+      );
+    }
+  }
+
+  if (nearbyTarget?.kind === "compost") {
+    const wiltedKey = findWiltedInventoryKey(game);
+    const emptySlot = game.compost.slots.some((slot) => slot === null);
+    return (
+      <div className="plot-details plot-details--compost">
+        <div className="detail-copy">
+          <strong>퇴비함</strong>
+          <div className="compost-slots">
+            {game.compost.slots.map((slot, index) => {
+              const remaining = getCompostRemainingMs(slot, now);
+              const label = !slot ? "비어 있음" : remaining <= 0 ? "완성" : `${formatDuration(remaining)} 남음`;
+              return (
+                <span className="compost-slot" key={index}>
+                  슬롯 {index + 1}: {label}
+                </span>
+              );
+            })}
+          </div>
+          {!wiltedKey && <small>넣을 시든 작물이 없습니다.</small>}
+        </div>
+        {game.compost.slots.map((slot, index) => (
+          <button
+            className="primary-button"
+            type="button"
+            key={index}
+            disabled={!slot || getCompostRemainingMs(slot, now) > 0}
+            onClick={() => collectCompost(index)}
+          >
+            슬롯 {index + 1} 수거
+          </button>
+        ))}
+        <button className="primary-button secondary" type="button" disabled={!emptySlot || !wiltedKey} onClick={addWiltedToCompost}>
+          시든 작물 넣기
         </button>
       </div>
     );
@@ -233,14 +323,15 @@ function VisitorPanel() {
 
   const crop = CROP_DEFS[visitor.cropType];
   const hasCrop = Boolean(findInventoryCropKey(game, visitor.cropType));
+  const bonus = getVisitorBonus(game);
   return (
     <section className="panel">
       <div className="panel-heading">
         <h2>{visitor.name}의 요청</h2>
-        <span className="soft-badge">{visitor.done ? "완료" : `x${visitor.bonus}`}</span>
+        <span className="soft-badge">{visitor.done ? "완료" : `x${bonus}`}</span>
       </div>
       <div className="visitor-card">
-        <p>{crop.name} 수확물을 {visitor.bonus}배 가격으로 정산합니다.</p>
+        <p>{crop.name} 수확물을 {bonus}배 가격으로 정산합니다. 아늑함이 높을수록 손님 보너스가 올라갑니다.</p>
         <button className="primary-button" type="button" disabled={visitor.done || !hasCrop} onClick={deliverVisitorOrder}>
           {visitor.done ? "요청 완료" : `${crop.name} 납품`}
         </button>
@@ -252,14 +343,18 @@ function VisitorPanel() {
 function ShopPanel() {
   const game = useGameStore((store) => store.game);
   const buySeed = useGameStore((store) => store.buySeed);
+  const buyDecoration = useGameStore((store) => store.buyDecoration);
+  const startDecorationPlacement = useGameStore((store) => store.startDecorationPlacement);
   const count = getCodexCount(game);
+  const unplacedDecorations = game.decorations.filter((decoration) => !isDecorationPlaced(decoration));
 
   return (
     <section className="panel">
       <div className="panel-heading">
-        <h2>씨앗 상점</h2>
+        <h2>상점</h2>
         <span className="soft-badge">{BALANCE_LABEL}</span>
       </div>
+      <h3 className="shop-subheading">씨앗</h3>
       <div className="stack-list">
         {Object.values(CROP_DEFS).map((crop) => {
           const locked = Boolean(crop.unlockCodex && count < crop.unlockCodex);
@@ -282,6 +377,44 @@ function ShopPanel() {
             </div>
           );
         })}
+      </div>
+      <h3 className="shop-subheading">장식</h3>
+      <div className="stack-list">
+        {Object.values(DECOR_DEFS).map((decor) => (
+          <div className="list-row" key={decor.id}>
+            <div>
+              <strong>{decor.name}</strong>
+              <small>아늑함 {decor.cozy}</small>
+            </div>
+            <div className="row-actions">
+              <button className="item-button" type="button" disabled={game.gold < decor.cost} onClick={() => buyDecoration(decor.id)}>
+                {decor.cost}G
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="owned-decor-list">
+        <strong>보유 장식</strong>
+        {unplacedDecorations.length === 0 ? (
+          <small>미배치 장식 없음</small>
+        ) : (
+          <div className="stack-list">
+            {unplacedDecorations.map((decoration) => (
+              <div className="list-row" key={decoration.id}>
+                <div>
+                  <strong>{DECOR_DEFS[decoration.type].name}</strong>
+                  <small>아늑함 {DECOR_DEFS[decoration.type].cozy}</small>
+                </div>
+                <div className="row-actions">
+                  <button className="item-button secondary" type="button" onClick={() => startDecorationPlacement(decoration.id)}>
+                    배치
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -345,6 +478,11 @@ function CodexPanel() {
   const claimReward = useGameStore((store) => store.claimReward);
   const possible = getPossibleCodexEntries();
   const count = getCodexCount(game);
+  const sections = [
+    { title: "작물", entries: possible.filter((entry) => entry.key.startsWith("crop|")) },
+    { title: "채집", entries: possible.filter((entry) => entry.key.startsWith("forage|")) },
+    { title: "생물", entries: possible.filter((entry) => entry.key.startsWith("critter|")) },
+  ];
 
   return (
     <section className="panel">
@@ -352,16 +490,21 @@ function CodexPanel() {
         <h2>도감</h2>
         <span className="soft-badge">{count}/{possible.length}</span>
       </div>
-      <div className="codex-grid">
-        {possible.map((entry) => {
-          const found = Boolean(game.codex[entry.key]);
-          return (
-            <div className={`codex-tile ${found ? "is-found" : ""}`} key={entry.key}>
-              {found ? entry.label : "???"}
-            </div>
-          );
-        })}
-      </div>
+      {sections.map((section) => (
+        <div className="codex-section" key={section.title}>
+          <h3 className="codex-section-title">{section.title}</h3>
+          <div className="codex-grid">
+            {section.entries.map((entry) => {
+              const found = Boolean(game.codex[entry.key]);
+              return (
+                <div className={`codex-tile ${found ? "is-found" : ""}`} key={entry.key}>
+                  {found ? entry.label : "???"}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
       <div className="reward-list">
         {CODEX_REWARDS.map((reward) => {
           const claimed = game.claimedRewards.includes(reward.id);
@@ -388,9 +531,15 @@ function CodexPanel() {
 function HiddenPlotStatus() {
   const game = useGameStore((store) => store.game);
   const now = useGameStore((store) => store.now);
+  const season = getSeason(now);
+  const weather = getWeather(now);
+  const compostReady = game.compost.slots.filter((slot) => slot && getCompostRemainingMs(slot, now) <= 0).length;
 
   return (
     <ul className="sr-only">
+      <li>
+        정원 상태: {getSeasonName(season)}, {getWeatherName(weather)}, 아늑함 {getCoziness(game)}, 완성 퇴비 {compostReady}개
+      </li>
       {game.plots.map((plot, index) => {
         if (!plot.unlocked) return <li key={plot.id}>밭 {index + 1}: 잠김</li>;
         if (!plot.crop) return <li key={plot.id}>밭 {index + 1}: 비어 있음</li>;
@@ -420,6 +569,7 @@ function InteractionPromptOverlay() {
 
 function TouchControls() {
   const prompt = useGameStore((store) => store.nearbyInteraction);
+  const placementDecorationId = useGameStore((store) => store.placementDecorationId);
   const padRef = useRef<HTMLDivElement>(null);
   const [knob, setKnob] = useState({ x: 0, y: 0, active: false });
   const maxRadius = 46;
@@ -466,8 +616,8 @@ function TouchControls() {
       >
         <span className="touch-joystick__knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
       </div>
-      <button className="touch-action-button" type="button" disabled={!prompt} onClick={requestVirtualInteraction}>
-        {prompt ? prompt.label : "대상 없음"}
+      <button className="touch-action-button" type="button" disabled={!prompt && !placementDecorationId} onClick={requestVirtualInteraction}>
+        {placementDecorationId ? "설치" : prompt ? prompt.label : "대상 없음"}
       </button>
     </div>
   );
@@ -507,6 +657,9 @@ function WelcomeModal() {
           <span>시든 작물 <strong>{summary.wiltedCrops}개</strong></span>
           <span>채집 리필 <strong>{summary.gatherRefilled ? "발생" : "없음"}</strong></span>
           <span>출석 보상 <strong>{summary.dailyReward ? "수령" : "유지"}</strong></span>
+          <span>비 소식 <strong>{summary.weatherNotice}</strong></span>
+          <span>생물 흔적 <strong>{summary.critterTrace || "없음"}</strong></span>
+          <span>퇴비 완성 <strong>{summary.compostReadyCount}개</strong></span>
         </div>
         <button className="primary-button" type="button" onClick={dismissWelcome}>
           정원으로 돌아가기
