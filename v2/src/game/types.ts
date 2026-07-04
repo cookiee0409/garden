@@ -1,12 +1,14 @@
 export type QualityId = "normal" | "silver" | "gold" | "wilted";
-export type SceneId = "garden" | "forest";
+export type SceneId = "garden" | "forest" | "pond";
 export type GrowthStage = "sprout" | "middle" | "ready";
 export type BalanceId = "demo" | "live";
-export type PortalId = "garden-to-forest" | "forest-to-garden";
+export type PortalId = "garden-to-forest" | "forest-to-garden" | "forest-to-pond" | "pond-to-forest";
 export type SeasonId = "spring" | "summer" | "autumn" | "winter";
 export type WeatherId = "clear" | "rain" | "snow";
-export type DecorationType = "fence" | "flower_pot" | "bench" | "lamp" | "mini_pond";
+export type DecorationType = "fence" | "flower_pot" | "bench" | "lamp" | "mini_pond" | "pet_house";
 export type CritterType = "butterfly" | "sparrow" | "rabbit" | "frog" | "hedgehog" | "owl";
+export type PetId = "luna_cat" | "sol_pup" | "maru_sparrow" | "noa_turtle" | "ara_fox";
+export type FishId = "pond_minow" | "sun_carp" | "rain_catfish" | "moon_eel" | "lotus_koi" | "gold_scale";
 export type InteractionActionKind =
   | "unlock"
   | "plant"
@@ -17,8 +19,10 @@ export type InteractionActionKind =
   | "portal"
   | "pickup"
   | "observe"
-  | "compost";
-export type PlayerSpawnId = "garden-default" | "garden-from-forest" | "forest-from-garden";
+  | "compost"
+  | "pet"
+  | "fish";
+export type PlayerSpawnId = "garden-default" | "garden-from-forest" | "forest-from-garden" | "forest-from-pond" | "pond-from-forest";
 
 export type InteractionTarget =
   | { kind: "plot"; index: number }
@@ -26,7 +30,9 @@ export type InteractionTarget =
   | { kind: "portal"; id: PortalId; to: SceneId }
   | { kind: "decoration"; id: string }
   | { kind: "compost" }
-  | { kind: "critter"; id: string; type: CritterType; x: number; z: number };
+  | { kind: "critter"; id: string; type: CritterType; x: number; z: number }
+  | { kind: "pet"; id: PetId; x: number; z: number }
+  | { kind: "fishingSpot" };
 
 export interface InteractionPrompt {
   target: InteractionTarget;
@@ -84,6 +90,25 @@ export interface CritterDef {
   id: CritterType;
   name: string;
   note: string;
+}
+
+export interface PetDef {
+  id: PetId;
+  visitor: string;
+  name: string;
+  model: CritterType;
+  helper: "water" | "forage";
+}
+
+export interface FishDef {
+  id: FishId;
+  name: string;
+  sellPrice: number;
+  weight: number;
+  dayOnly?: boolean;
+  nightOnly?: boolean;
+  rainBonus?: number;
+  season?: SeasonId;
 }
 
 export interface CodexReward {
@@ -157,6 +182,11 @@ export interface GameState {
   lastRainWateredDate: string | null;
   decorations: PlacedDecoration[];
   compost: CompostState;
+  visitorAffinity: Record<string, number>;
+  pets: PetId[];
+  petAssistDates: Record<string, string>;
+  bait: number;
+  lastBaitRefillDate: string | null;
   createdAt: number;
   lastSeenAt: number;
 }
@@ -220,4 +250,11 @@ export interface ActiveCritter {
   x: number;
   z: number;
   heartPulse: number;
+}
+
+export interface FishingState {
+  phase: "idle" | "waiting" | "bite";
+  startedAt: number | null;
+  biteAt: number | null;
+  expiresAt: number | null;
 }

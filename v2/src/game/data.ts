@@ -1,8 +1,9 @@
-import type { BalanceId, CodexReward, CritterDef, CropDef, DecorationDef, ForageDef, QualityDef, QualityId } from "./types";
+import type { BalanceId, CodexReward, CritterDef, CropDef, DecorationDef, FishDef, ForageDef, PetDef, QualityDef, QualityId } from "./types";
 
 export const SAVE_KEY = "mini-idle-garden-save-v1";
 export const BALANCE_STORAGE_KEY = "mini-idle-garden-balance";
-export const CURRENT_SAVE_VERSION = 3;
+export const CURRENT_SAVE_VERSION = 4;
+export const DAILY_BAIT_MAX = 5;
 
 export const BALANCE_PRESETS: Record<
   BalanceId,
@@ -18,6 +19,9 @@ export const BALANCE_PRESETS: Record<
     critterStayMinMs: number;
     critterStayMaxMs: number;
     critterTraceOfflineMs: number;
+    fishingWaitMinMs: number;
+    fishingWaitMaxMs: number;
+    fishingBiteWindowMs: number;
   }
 > = {
   demo: {
@@ -40,6 +44,9 @@ export const BALANCE_PRESETS: Record<
     critterStayMinMs: 30 * 1000,
     critterStayMaxMs: 60 * 1000,
     critterTraceOfflineMs: 10 * 60 * 1000,
+    fishingWaitMinMs: 3 * 1000,
+    fishingWaitMaxMs: 10 * 1000,
+    fishingBiteWindowMs: 1200,
   },
   live: {
     id: "live",
@@ -61,6 +68,9 @@ export const BALANCE_PRESETS: Record<
     critterStayMinMs: 3 * 60 * 1000,
     critterStayMaxMs: 8 * 60 * 1000,
     critterTraceOfflineMs: 6 * 60 * 60 * 1000,
+    fishingWaitMinMs: 3 * 1000,
+    fishingWaitMaxMs: 10 * 1000,
+    fishingBiteWindowMs: 1200,
   },
 };
 
@@ -172,6 +182,7 @@ export const DECOR_DEFS: Record<string, DecorationDef> = {
   bench: { id: "bench", name: "벤치", cost: 160, cozy: 5, colliderRadius: 0.38 },
   lamp: { id: "lamp", name: "가로등", cost: 220, cozy: 6, colliderRadius: 0.26 },
   mini_pond: { id: "mini_pond", name: "미니 연못", cost: 320, cozy: 8, colliderRadius: 0.48 },
+  pet_house: { id: "pet_house", name: "펫 하우스", cost: 280, cozy: 6, colliderRadius: 0.38 },
 };
 
 export const CRITTER_DEFS: Record<string, CritterDef> = {
@@ -181,6 +192,23 @@ export const CRITTER_DEFS: Record<string, CritterDef> = {
   frog: { id: "frog", name: "개구리", note: "비나 눈이 오는 날 폴짝입니다." },
   hedgehog: { id: "hedgehog", name: "고슴도치", note: "밤의 아늑한 정원을 좋아합니다." },
   owl: { id: "owl", name: "부엉이", note: "밤이면 나무 곁에서 조용히 지켜봅니다." },
+};
+
+export const PET_DEFS: Record<string, PetDef> = {
+  luna_cat: { id: "luna_cat", visitor: "루나", name: "루나의 고양이", model: "hedgehog", helper: "water" },
+  sol_pup: { id: "sol_pup", visitor: "솔", name: "솔의 강아지", model: "rabbit", helper: "forage" },
+  maru_sparrow: { id: "maru_sparrow", visitor: "마루", name: "마루의 참새", model: "sparrow", helper: "forage" },
+  noa_turtle: { id: "noa_turtle", visitor: "노아", name: "노아의 거북이", model: "frog", helper: "water" },
+  ara_fox: { id: "ara_fox", visitor: "아라", name: "아라의 여우", model: "owl", helper: "water" },
+};
+
+export const FISH_DEFS: Record<string, FishDef> = {
+  pond_minow: { id: "pond_minow", name: "연못 피라미", sellPrice: 70, weight: 32, dayOnly: true },
+  sun_carp: { id: "sun_carp", name: "햇살 잉어", sellPrice: 96, weight: 24, dayOnly: true },
+  rain_catfish: { id: "rain_catfish", name: "빗수염 메기", sellPrice: 130, weight: 12, rainBonus: 24 },
+  moon_eel: { id: "moon_eel", name: "달그림자 장어", sellPrice: 142, weight: 12, nightOnly: true },
+  lotus_koi: { id: "lotus_koi", name: "연꽃 비단잉어", sellPrice: 165, weight: 8, season: "spring" },
+  gold_scale: { id: "gold_scale", name: "금비늘 물고기", sellPrice: 210, weight: 4 },
 };
 
 export const PLOT_UNLOCK_COSTS = [0, 0, 0, 0, 120, 170, 240, 330, 460];

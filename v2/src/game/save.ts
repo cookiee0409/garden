@@ -1,4 +1,4 @@
-import { BALANCE_ID, CURRENT_SAVE_VERSION } from "./data";
+import { BALANCE_ID, CURRENT_SAVE_VERSION, DAILY_BAIT_MAX, VISITORS } from "./data";
 import type { GameState } from "./types";
 
 type SavedShape = Record<string, unknown>;
@@ -7,6 +7,7 @@ type Migration = (saved: SavedShape) => SavedShape;
 const migrations: Record<number, Migration> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
+  3: migrateV3ToV4,
 };
 
 export function migrate(saved: Partial<GameState> | null): Partial<GameState> | null {
@@ -65,5 +66,20 @@ function migrateV2ToV3(saved: SavedShape): SavedShape {
         : {
             slots: [null, null],
           },
+  };
+}
+
+function migrateV3ToV4(saved: SavedShape): SavedShape {
+  return {
+    ...saved,
+    version: 4,
+    visitorAffinity:
+      saved.visitorAffinity && typeof saved.visitorAffinity === "object"
+        ? saved.visitorAffinity
+        : Object.fromEntries(VISITORS.map((name) => [name, 0])),
+    pets: Array.isArray(saved.pets) ? saved.pets : [],
+    petAssistDates: saved.petAssistDates && typeof saved.petAssistDates === "object" ? saved.petAssistDates : {},
+    bait: typeof saved.bait === "number" ? saved.bait : DAILY_BAIT_MAX,
+    lastBaitRefillDate: typeof saved.lastBaitRefillDate === "string" ? saved.lastBaitRefillDate : null,
   };
 }

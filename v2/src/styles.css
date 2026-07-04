@@ -594,6 +594,24 @@ h3 {
   line-height: 1.5;
 }
 
+.affinity-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.affinity-chip {
+  display: inline-flex;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 253, 240, 0.76);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
 .codex-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

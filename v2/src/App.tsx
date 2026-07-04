@@ -1,4 +1,4 @@
-import { BALANCE_LABEL, CODEX_REWARDS, CROP_DEFS, DECOR_DEFS, FERTILIZER_RECIPE, PLOT_UNLOCK_COSTS } from "./game/data";
+import { BALANCE_LABEL, CODEX_REWARDS, CROP_DEFS, DAILY_BAIT_MAX, DECOR_DEFS, FERTILIZER_RECIPE, PET_DEFS, PLOT_UNLOCK_COSTS, VISITORS } from "./game/data";
 import {
   findWiltedInventoryKey,
   findInventoryCropKey,
@@ -42,6 +42,7 @@ function ResourceStrip() {
       <span className="resource-pill">출석 <strong>{game.streak}일</strong></span>
       <span className="resource-pill">물뿌리개 <strong>{game.goldenWater}회</strong></span>
       <span className="resource-pill">비료 <strong>{game.fertilizer}개</strong></span>
+      <span className="resource-pill">미끼 <strong>{game.bait}/{DAILY_BAIT_MAX}</strong></span>
       <span className="resource-pill">아늑함 <strong>{getCoziness(game)}</strong></span>
       <span className="resource-pill">날씨 <strong>{getSeasonName(season)} · {getWeatherName(weather)}</strong></span>
     </div>
@@ -71,6 +72,15 @@ function SceneToolbar() {
         onClick={() => switchScene("forest")}
       >
         숲 입구
+      </button>
+      <button
+        className={`tab-button ${scene === "pond" ? "active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={scene === "pond"}
+        onClick={() => switchScene("pond")}
+      >
+        연못가
       </button>
     </div>
   );
@@ -109,11 +119,13 @@ function PlotDetails() {
   const nearbyInteraction = useGameStore((store) => store.nearbyInteraction);
   const selectedForage = useGameStore((store) => store.selectedForage);
   const placementDecorationId = useGameStore((store) => store.placementDecorationId);
+  const fishing = useGameStore((store) => store.fishing);
   const performPlotAction = useGameStore((store) => store.performPlotAction);
   const performForageAction = useGameStore((store) => store.performForageAction);
   const useGoldenWater = useGameStore((store) => store.useGoldenWater);
   const useFertilizer = useGameStore((store) => store.useFertilizer);
   const startGatherRound = useGameStore((store) => store.startGatherRound);
+  const performFishingAction = useGameStore((store) => store.performFishingAction);
   const cancelDecorationPlacement = useGameStore((store) => store.cancelDecorationPlacement);
   const pickupDecoration = useGameStore((store) => store.pickupDecoration);
   const addWiltedToCompost = useGameStore((store) => store.addWiltedToCompost);
@@ -130,6 +142,25 @@ function PlotDetails() {
         </p>
         <button className="primary-button secondary" type="button" onClick={cancelDecorationPlacement}>
           취소
+        </button>
+      </div>
+    );
+  }
+
+  if (game.scene === "pond") {
+    const nearFishing = nearbyInteraction?.target.kind === "fishingSpot";
+    const biteReady = fishing.phase === "bite";
+    const waiting = fishing.phase === "waiting";
+    return (
+      <div className="plot-details">
+        <p className="detail-copy">
+          낚시터 · 미끼 {game.bait}/{DAILY_BAIT_MAX}
+          {waiting && fishing.biteAt ? ` · 입질까지 ${formatDuration(Math.max(0, fishing.biteAt - now))}` : ""}
+          {biteReady ? " · 지금!" : ""}
+          {!nearFishing ? " · 가까이 가야 합니다" : ""}
+        </p>
+        <button className={`primary-button ${biteReady ? "warning" : ""}`} type="button" disabled={!nearFishing || (game.bait <= 0 && fishing.phase === "idle")} onClick={performFishingAction}>
+          {biteReady ? "낚아채기" : waiting ? "기다리기" : "낚시하기"}
         </button>
       </div>
     );
@@ -336,6 +367,45 @@ function VisitorPanel() {
           {visitor.done ? "요청 완료" : `${crop.name} 납품`}
         </button>
       </div>
+      <div className="affinity-list">
+        {VISITORS.map((name) => {
+          const value = game.visitorAffinity[name] || 0;
+          return (
+            <span className="affinity-chip" key={name}>
+              {name} {value}/15
+            </span>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PetsPanel() {
+  const game = useGameStore((store) => store.game);
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h2>정착한 친구</h2>
+        <span className="soft-badge">{game.pets.length}마리</span>
+      </div>
+      {game.pets.length === 0 ? (
+        <p className="empty-state">호감도 15에 도달하면 손님의 동물 친구가 정원에 머뭅니다.</p>
+      ) : (
+        <div className="stack-list">
+          {game.pets.map((petId) => {
+            const pet = PET_DEFS[petId];
+            return (
+              <div className="list-row" key={petId}>
+                <div>
+                  <strong>{pet.name}</strong>
+                  <small>{pet.helper === "water" ? "하루 한 번 물주기 도움" : "하루 한 번 채집물 선물"}</small>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -482,6 +552,7 @@ function CodexPanel() {
     { title: "작물", entries: possible.filter((entry) => entry.key.startsWith("crop|")) },
     { title: "채집", entries: possible.filter((entry) => entry.key.startsWith("forage|")) },
     { title: "생물", entries: possible.filter((entry) => entry.key.startsWith("critter|")) },
+    { title: "물고기", entries: possible.filter((entry) => entry.key.startsWith("fish|")) },
   ];
 
   return (
@@ -538,7 +609,7 @@ function HiddenPlotStatus() {
   return (
     <ul className="sr-only">
       <li>
-        정원 상태: {getSeasonName(season)}, {getWeatherName(weather)}, 아늑함 {getCoziness(game)}, 완성 퇴비 {compostReady}개
+        정원 상태: {getSeasonName(season)}, {getWeatherName(weather)}, 아늑함 {getCoziness(game)}, 완성 퇴비 {compostReady}개, 미끼 {game.bait}개, 정착한 친구 {game.pets.length}마리
       </li>
       {game.plots.map((plot, index) => {
         if (!plot.unlocked) return <li key={plot.id}>밭 {index + 1}: 잠김</li>;
@@ -702,6 +773,7 @@ export default function App() {
         <SceneSection />
         <aside className="side-panels">
           <VisitorPanel />
+          <PetsPanel />
           <ShopPanel />
           <InventoryPanel />
           <CodexPanel />

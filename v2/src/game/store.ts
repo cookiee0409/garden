@@ -4,9 +4,12 @@ import {
   CODEX_REWARDS,
   CRITTER_DEFS,
   CROP_DEFS,
+  DAILY_BAIT_MAX,
   DECOR_DEFS,
+  FISH_DEFS,
   FERTILIZER_RECIPE,
   GATHER_REFILL_MS,
+  PET_DEFS,
   PLOT_UNLOCK_COSTS,
   QUALITY_DEFS,
   SAVE_KEY,
@@ -15,6 +18,7 @@ import { isSameTarget } from "./interactions";
 import {
   addCodex,
   addInventory,
+  applyDailyBaitRefill,
   applyDailyLogin,
   applyGatherRefill,
   applyDailyWeatherEffects,
@@ -42,6 +46,8 @@ import {
   makeItemKey,
   mergeSavedState,
   pickCritterType,
+  pickFishItem,
+  pickForageItem,
   rollQuality,
 } from "./logic";
 import { migrate } from "./save";
@@ -50,10 +56,12 @@ import type {
   ActiveCritter,
   CritterType,
   DecorationType,
+  FishingState,
   GameState,
   HarvestEffect,
   InteractionPrompt,
   InteractionTarget,
+  PetId,
   PlayerSpawnId,
   QualityId,
   SceneId,
@@ -115,10 +123,13 @@ function bootGame(): { game: GameState; messages: string[]; welcomeSummary: Welc
   messages.push(...applyDailyLogin(game, now));
   const weatherMessage = applyDailyWeatherEffects(game, now);
   if (weatherMessage) messages.push(weatherMessage);
+  const baitMessage = applyDailyBaitRefill(game, now);
+  if (baitMessage) messages.push(baitMessage);
   if (applyGatherRefill(game, now)) {
     messages.push("숲 입구 채집 기회가 다시 채워졌습니다.");
   }
   ensureDailyVisitor(game, now);
+  messages.push(...applyPetAssists(game, now));
   writeSave(game);
   return { game, messages, welcomeSummary };
 }
@@ -136,6 +147,8 @@ interface GameStore {
   harvestEffects: HarvestEffect[];
   careEffects: CareEffect[];
   activeCritters: ActiveCritter[];
+  fishing: FishingState;
+  petHeartPulses: Record<string, number>;
   nearbyInteraction: InteractionPrompt | null;
   selectedForage: number | null;
   placementDecorationId: string | null;
@@ -168,6 +181,8 @@ interface GameStore {
   placeDecoration: (id: string, x: number, z: number, rotY: number) => void;
   pickupDecoration: (id: string) => void;
   observeCritter: (id: string) => void;
+  petCompanion: (id: PetId) => void;
+  performFishingAction: () => void;
   addWiltedToCompost: () => void;
   collectCompost: (index: number) => void;
   performCompostAction: () => void;
@@ -189,6 +204,11 @@ function getCritterCheckDelay(game: GameState): number {
 function getCritterStayMs(game: GameState): number {
   const balance = BALANCE_PRESETS[game.balanceId] ?? BALANCE_PRESETS.demo;
   return randomBetween(balance.critterStayMinMs, balance.critterStayMaxMs);
+}
+
+function getFishingWaitMs(game: GameState): number {
+  const balance = BALANCE_PRESETS[game.balanceId] ?? BALANCE_PRESETS.demo;
+  return randomBetween(balance.fishingWaitMinMs, balance.fishingWaitMaxMs);
 }
 
 function randomCritterSpawn(type: CritterType): { x: number; z: number } {
@@ -220,6 +240,64 @@ function makeActiveCritter(type: CritterType, game: GameState, now = Date.now())
     z: position.z,
     heartPulse: 0,
   };
+}
+
+function petForVisitor(visitorName: string): PetId | null {
+  const pet = Object.values(PET_DEFS).find((item) => item.visitor === visitorName);
+  return pet?.id ?? null;
+}
+
+function applyAffinityRewards(state: GameState, visitorName: string, show: (message: string) => void): void {
+  const affinity = state.visitorAffinity[visitorName] || 0;
+  if (affinity === 5) {
+    state.seeds.strawberry = (state.seeds.strawberry || 0) + 1;
+    state.seeds.sunflower = (state.seeds.sunflower || 0) + 1;
+    show(`${visitorName}와 조금 가까워졌습니다. 씨앗 선물을 받았습니다.`);
+  }
+  if (affinity === 10 && !state.decorations.some((decoration) => decoration.type === "pet_house")) {
+    state.decorations.push({
+      id: makeDecorationId("pet_house"),
+      type: "pet_house",
+      x: null,
+      z: null,
+      rotY: 0,
+    });
+    show(`${visitorName}가 펫 하우스를 선물했습니다.`);
+  }
+  if (affinity === 15) {
+    const petId = petForVisitor(visitorName);
+    if (petId && !state.pets.includes(petId)) {
+      state.pets.push(petId);
+      show(`${PET_DEFS[petId].name}가 정원에 정착했습니다.`);
+    }
+  }
+}
+
+function applyPetAssists(state: GameState, now: number): string[] {
+  const today = getDayKey(now);
+  const messages: string[] = [];
+  state.pets.forEach((petId) => {
+    if (state.petAssistDates[petId] === today) return;
+    const pet = PET_DEFS[petId];
+    if (!pet) return;
+
+    if (pet.helper === "water") {
+      const plot = state.plots.find((item) => item.crop && !item.crop.watered && !getCropStatus(item, now).isReady);
+      if (plot?.crop) {
+        plot.crop.watered = true;
+        state.petAssistDates[petId] = today;
+        messages.push(`${pet.name}가 물이 필요한 밭을 돌봐주었습니다.`);
+      }
+      return;
+    }
+
+    const forageId = pickForageItem(now);
+    const key = makeItemKey("forage", forageId, "normal");
+    addInventory(state, key, 1);
+    state.petAssistDates[petId] = today;
+    messages.push(`${pet.name}가 ${getItemInfo(key).name}을 물고 왔습니다.`);
+  });
+  return messages;
 }
 
 export const useGameStore = create<GameStore>((set, get) => {
@@ -265,7 +343,12 @@ export const useGameStore = create<GameStore>((set, get) => {
     return false;
   };
 
-  const spawnForScene = (scene: SceneId): PlayerSpawnId => (scene === "garden" ? "garden-from-forest" : "forest-from-garden");
+  const spawnForTransition = (from: SceneId, to: SceneId): PlayerSpawnId => {
+    if (to === "garden") return "garden-from-forest";
+    if (to === "pond") return "pond-from-forest";
+    if (to === "forest" && from === "pond") return "forest-from-pond";
+    return "forest-from-garden";
+  };
 
   const switchSceneTo = (scene: SceneId) => {
     if (!["garden", "forest"].includes(scene)) return;
@@ -279,7 +362,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       nearbyInteraction: null,
       selectedForage: null,
       placementDecorationId: null,
-      playerSpawn: { id: spawnForScene(scene), version: store.playerSpawn.version + 1 },
+      playerSpawn: { id: spawnForTransition(current.scene, scene), version: store.playerSpawn.version + 1 },
       interactionCooldownUntil: Date.now() + SCENE_INTERACTION_COOLDOWN_MS,
     }));
   };
@@ -421,6 +504,16 @@ export const useGameStore = create<GameStore>((set, get) => {
       get().observeCritter(target.id);
       return;
     }
+    if (target.kind === "pet") {
+      if (checkNearby && !requireNearby(target)) return;
+      get().petCompanion(target.id);
+      return;
+    }
+    if (target.kind === "fishingSpot") {
+      if (checkNearby && !requireNearby(target)) return;
+      get().performFishingAction();
+      return;
+    }
     if (target.kind === "plot") {
       runPlotAction(target.index, checkNearby);
       return;
@@ -433,6 +526,23 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ now });
 
     const current = get().game;
+    const fishing = get().fishing;
+    if (fishing.phase === "waiting" && fishing.biteAt !== null && now >= fishing.biteAt) {
+      const biteWindow = BALANCE_PRESETS[current.balanceId]?.fishingBiteWindowMs ?? BALANCE_PRESETS.demo.fishingBiteWindowMs;
+      set({
+        fishing: {
+          ...fishing,
+          phase: "bite",
+          expiresAt: now + biteWindow,
+        },
+      });
+      showToast("찌가 흔들립니다. 지금 E를 누르세요.");
+    }
+    if (fishing.phase === "bite" && fishing.expiresAt !== null && now > fishing.expiresAt) {
+      set({ fishing: { phase: "idle", startedAt: null, biteAt: null, expiresAt: null } });
+      showToast("물고기를 놓쳤습니다.");
+    }
+
     const activeCritters = get().activeCritters;
     const livingCritters = activeCritters.filter((critter) => critter.leaveAt > now);
     if (livingCritters.length !== activeCritters.length) {
@@ -460,15 +570,28 @@ export const useGameStore = create<GameStore>((set, get) => {
       current.dailyVisitor.date !== getDayKey(now) ||
       current.dailyVisitor.bonus !== 1.5;
     const needsWeather = getWeather(now) !== "clear" && current.lastRainWateredDate !== getDayKey(now);
-    if (!needsRefill && !needsVisitor && !needsWeather) return;
+    const today = getDayKey(now);
+    const needsBait = current.lastBaitRefillDate !== today;
+    const needsPetAssist = current.pets.some((petId) => current.petAssistDates[petId] !== today);
+    if (!needsRefill && !needsVisitor && !needsWeather && !needsBait && !needsPetAssist) return;
 
     const next = structuredClone(current);
     let changed = applyGatherRefill(next, now);
     if (ensureDailyVisitor(next, now)) changed = true;
+    const baitMessage = applyDailyBaitRefill(next, now);
+    if (baitMessage) {
+      changed = true;
+      showToast(baitMessage);
+    }
     const weatherMessage = applyDailyWeatherEffects(next, now);
     if (weatherMessage) {
       changed = true;
       showToast(weatherMessage);
+    }
+    const petMessages = applyPetAssists(next, now);
+    if (petMessages.length > 0) {
+      changed = true;
+      petMessages.forEach(showToast);
     }
     if (changed) commit(next);
   }, 1000);
@@ -485,6 +608,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     harvestEffects: [],
     careEffects: [],
     activeCritters: [],
+    fishing: { phase: "idle", startedAt: null, biteAt: null, expiresAt: null },
+    petHeartPulses: {},
     nearbyInteraction: null,
     selectedForage: null,
     placementDecorationId: null,
@@ -627,6 +752,8 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (next.inventory[key] <= 0) delete next.inventory[key];
       next.gold += reward;
       visitor.done = true;
+      next.visitorAffinity[visitor.name] = (next.visitorAffinity[visitor.name] || 0) + 1;
+      applyAffinityRewards(next, visitor.name, showToast);
       showToast(`${visitor.name}의 요청을 완료하고 ${reward}G를 받았습니다.`);
       commit(next);
     },
@@ -843,6 +970,63 @@ export const useGameStore = create<GameStore>((set, get) => {
       showToast(firstObservation ? `${CRITTER_DEFS[critter.type].name}를 도감에 기록하고 30G를 받았습니다.` : `${CRITTER_DEFS[critter.type].name}가 반가워합니다.`);
     },
 
+    petCompanion: (id) => {
+      const pet = PET_DEFS[id];
+      if (!pet || !get().game.pets.includes(id)) return;
+      set((store) => ({
+        petHeartPulses: {
+          ...store.petHeartPulses,
+          [id]: (store.petHeartPulses[id] || 0) + 1,
+        },
+      }));
+      showToast(`${pet.name}가 기분 좋게 다가옵니다.`);
+    },
+
+    performFishingAction: () => {
+      const now = Date.now();
+      const currentFishing = get().fishing;
+      if (currentFishing.phase === "waiting") {
+        showToast("찌를 바라보며 조금 더 기다립니다.");
+        return;
+      }
+
+      if (currentFishing.phase === "bite") {
+        if (currentFishing.expiresAt !== null && now <= currentFishing.expiresAt) {
+          const fishId = pickFishItem(now);
+          const key = makeItemKey("fish", fishId, "normal");
+          const next = structuredClone(get().game);
+          addInventory(next, key, 1);
+          addCodex(next, key, now);
+          commit(next);
+          set({ fishing: { phase: "idle", startedAt: null, biteAt: null, expiresAt: null } });
+          showToast(`${FISH_DEFS[fishId].name}을 낚았습니다.`);
+          return;
+        }
+        set({ fishing: { phase: "idle", startedAt: null, biteAt: null, expiresAt: null } });
+        showToast("물고기를 놓쳤습니다.");
+        return;
+      }
+
+      const next = structuredClone(get().game);
+      if (next.bait <= 0) {
+        showToast("오늘 사용할 미끼가 없습니다.");
+        return;
+      }
+
+      next.bait -= 1;
+      commit(next);
+      const biteAt = now + getFishingWaitMs(next);
+      set({
+        fishing: {
+          phase: "waiting",
+          startedAt: now,
+          biteAt,
+          expiresAt: null,
+        },
+      });
+      showToast(`낚싯줄을 드리웠습니다. 남은 미끼 ${next.bait}/${DAILY_BAIT_MAX}`);
+    },
+
     addWiltedToCompost: () => {
       if (!requireNearby({ kind: "compost" })) return;
       const next = structuredClone(get().game);
@@ -907,6 +1091,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       const fresh = createDefaultState(now);
       applyDailyLogin(fresh, now);
       applyDailyWeatherEffects(fresh, now);
+      applyDailyBaitRefill(fresh, now);
       ensureDailyVisitor(fresh, now);
       writeSave(fresh);
       nextCritterCheckAt = now + getCritterCheckDelay(fresh);
@@ -917,6 +1102,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         harvestEffects: [],
         careEffects: [],
         activeCritters: [],
+        fishing: { phase: "idle", startedAt: null, biteAt: null, expiresAt: null },
+        petHeartPulses: {},
         nearbyInteraction: null,
         selectedForage: null,
         placementDecorationId: null,

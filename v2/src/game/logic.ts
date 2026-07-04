@@ -4,7 +4,9 @@ import {
   CRITTER_DEFS,
   CROP_DEFS,
   CURRENT_SAVE_VERSION,
+  DAILY_BAIT_MAX,
   DECOR_DEFS,
+  FISH_DEFS,
   FORAGE_DEFS,
   FORAGE_POSITIONS,
   GATHER_REFILL_MS,
@@ -20,11 +22,13 @@ import type {
   CropStatus,
   CritterType,
   DecorationType,
+  FishId,
   GameState,
   GatherSpot,
   ItemInfo,
   PlacedDecoration,
   PlotState,
+  PetId,
   QualityId,
   SeasonId,
   WeatherId,
@@ -70,6 +74,11 @@ export function createDefaultState(now = Date.now()): GameState {
     compost: {
       slots: [null, null],
     },
+    visitorAffinity: Object.fromEntries(VISITORS.map((name) => [name, 0])),
+    pets: [],
+    petAssistDates: {},
+    bait: DAILY_BAIT_MAX,
+    lastBaitRefillDate: null,
     createdAt: now,
     lastSeenAt: now,
   };
@@ -124,6 +133,22 @@ export function sanitizeCompost(compost: unknown, now = Date.now()): CompostStat
   };
 }
 
+export function sanitizeVisitorAffinity(value: unknown): Record<string, number> {
+  const affinity = Object.fromEntries(VISITORS.map((name) => [name, 0]));
+  if (!value || typeof value !== "object") return affinity;
+  VISITORS.forEach((name) => {
+    const raw = (value as Record<string, unknown>)[name];
+    affinity[name] = typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  });
+  return affinity;
+}
+
+export function sanitizePets(value: unknown): PetId[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set<PetId>(["luna_cat", "sol_pup", "maru_sparrow", "noa_turtle", "ara_fox"]);
+  return Array.from(new Set(value.filter((item): item is PetId => allowed.has(item as PetId))));
+}
+
 export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now()): GameState {
   const base = createDefaultState(now);
   if (!saved) return base;
@@ -145,6 +170,9 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
     },
     decorations: sanitizeDecorations(saved.decorations),
     compost: sanitizeCompost(saved.compost, now),
+    visitorAffinity: sanitizeVisitorAffinity(saved.visitorAffinity),
+    pets: sanitizePets(saved.pets),
+    petAssistDates: saved.petAssistDates && typeof saved.petAssistDates === "object" ? { ...(saved.petAssistDates as Record<string, string>) } : {},
   };
 
   merged.plots = merged.plots.map((plot: PlotState, index: number) => ({
@@ -154,7 +182,7 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
   }));
 
   if (!CROP_DEFS[merged.selectedSeed]) merged.selectedSeed = "tomato";
-  if (!["garden", "forest"].includes(merged.scene)) merged.scene = "garden";
+  if (!["garden", "forest", "pond"].includes(merged.scene)) merged.scene = "garden";
   if (!Array.isArray(merged.gather.spots)) merged.gather.spots = makeGatherSpots(now);
   if (typeof merged.gather.charges !== "number") merged.gather.charges = 0;
   if (typeof merged.gather.lastRefillAt !== "number") merged.gather.lastRefillAt = now;
@@ -165,6 +193,12 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
   if (typeof merged.lastRainWateredDate !== "string") merged.lastRainWateredDate = null;
   merged.decorations = sanitizeDecorations(merged.decorations);
   merged.compost = sanitizeCompost(merged.compost, now);
+  merged.visitorAffinity = sanitizeVisitorAffinity(merged.visitorAffinity);
+  merged.pets = sanitizePets(merged.pets);
+  if (!merged.petAssistDates || typeof merged.petAssistDates !== "object") merged.petAssistDates = {};
+  if (typeof merged.bait !== "number") merged.bait = DAILY_BAIT_MAX;
+  merged.bait = clamp(Math.floor(merged.bait), 0, DAILY_BAIT_MAX);
+  if (typeof merged.lastBaitRefillDate !== "string") merged.lastBaitRefillDate = null;
   if (merged.balanceId !== BALANCE_ID) {
     merged.plots.forEach((plot) => {
       if (!plot.crop) return;
@@ -225,6 +259,14 @@ export function applyDailyWeatherEffects(state: GameState, now = Date.now()): st
 
   if (weather === "snow") return wateredCount > 0 ? "눈이 녹아 밭이 촉촉해졌습니다." : "눈이 내려 정원이 조용히 반짝입니다.";
   return wateredCount > 0 ? "비가 내려 밭이 촉촉해졌습니다." : "비가 내려 정원이 촉촉해졌습니다.";
+}
+
+export function applyDailyBaitRefill(state: GameState, now = Date.now()): string | null {
+  const today = getDayKey(now);
+  if (state.lastBaitRefillDate === today) return null;
+  state.bait = DAILY_BAIT_MAX;
+  state.lastBaitRefillDate = today;
+  return "오늘의 미끼 5개가 채워졌습니다.";
 }
 
 export function ensureDailyVisitor(state: GameState, now = Date.now()): boolean {
@@ -399,6 +441,18 @@ export function getItemInfo(key: string): ItemInfo {
     };
   }
 
+  if (kind === "fish") {
+    const fish = FISH_DEFS[id];
+    return {
+      kind,
+      id,
+      quality,
+      name: fish.name,
+      sellPrice: fish.sellPrice,
+      qualityClass: "quality-normal",
+    };
+  }
+
   const forage = FORAGE_DEFS[id];
   return {
     kind,
@@ -446,7 +500,12 @@ export function getPossibleCodexEntries(): CodexEntry[] {
     label: critter.name,
   }));
 
-  return [...cropEntries, ...forageEntries, ...critterEntries];
+  const fishEntries = Object.values(FISH_DEFS).map((fish) => ({
+    key: makeItemKey("fish", fish.id, "normal"),
+    label: fish.name,
+  }));
+
+  return [...cropEntries, ...forageEntries, ...critterEntries, ...fishEntries];
 }
 
 export function getCodexCount(state: GameState): number {
@@ -510,6 +569,29 @@ export function getCritterTrace(state: GameState, offlineMs: number, now = Date.
   const type = eligible[hashString(`${getDayKey(traceAt)}:${offlineMs}:critter-trace`) % eligible.length];
   const dayPart = isNightTime(traceAt) ? "밤사이" : "잠시";
   return `${dayPart} ${CRITTER_DEFS[type].name}가 다녀간 흔적이 있어요.`;
+}
+
+export function pickFishItem(now = Date.now()): FishId {
+  const night = isNightTime(now);
+  const weather = getWeather(now);
+  const season = getSeason(now);
+  const pool = Object.values(FISH_DEFS).filter((fish) => {
+    if (fish.dayOnly && night) return false;
+    if (fish.nightOnly && !night) return false;
+    if (fish.season && fish.season !== season) return false;
+    return true;
+  });
+  const weighted = pool.map((fish) => ({
+    fish,
+    weight: fish.weight + (weather !== "clear" ? fish.rainBonus || 0 : 0),
+  }));
+  const total = weighted.reduce((sum, item) => sum + item.weight, 0);
+  let roll = Math.random() * total;
+  for (const item of weighted) {
+    roll -= item.weight;
+    if (roll <= 0) return item.fish.id as FishId;
+  }
+  return (weighted[0]?.fish.id || "pond_minow") as FishId;
 }
 
 export function getGatherRemainingMs(state: GameState, now = Date.now()): number {

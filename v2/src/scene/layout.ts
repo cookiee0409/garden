@@ -24,10 +24,17 @@ export const FOREST_ISLAND_GEOMETRY = {
   bottom: [5.0, 4.2, 0.4, 9] as [number, number, number, number],
 };
 
+export const POND_ISLAND_GEOMETRY = {
+  top: [4.35, 4.7, 0.46, 10] as [number, number, number, number],
+  bottom: [4.8, 4.05, 0.38, 10] as [number, number, number, number],
+};
+
 export const SPAWN_POSITIONS: Record<PlayerSpawnId, [number, number, number]> = {
   "garden-default": [0, 0.05, 2.9],
   "garden-from-forest": [0, 0.05, 2.9],
   "forest-from-garden": [0, 0.05, -2.9],
+  "forest-from-pond": [0, 0.05, 2.9],
+  "pond-from-forest": [0, 0.05, -2.9],
 };
 
 export const PORTALS: Record<SceneId, { target: InteractionTarget; position: [number, number, number]; sign: string }> = {
@@ -41,6 +48,17 @@ export const PORTALS: Record<SceneId, { target: InteractionTarget; position: [nu
     position: [0, 0, -3.9],
     sign: "정원",
   },
+  pond: {
+    target: { kind: "portal", id: "pond-to-forest", to: "forest" },
+    position: [0, 0, -3.9],
+    sign: "숲",
+  },
+};
+
+export const FOREST_POND_PORTAL = {
+  target: { kind: "portal", id: "forest-to-pond", to: "pond" } as InteractionTarget,
+  position: [0, 0, 3.9] as [number, number, number],
+  sign: "연못",
 };
 
 export const GARDEN_TREES = [
@@ -57,8 +75,9 @@ export const FOREST_TREES = [
 
 export const GARDEN_TREE_COLLIDERS = GARDEN_TREES.map((tree) => tree.collider);
 export const FOREST_TREE_COLLIDERS = FOREST_TREES.map((tree) => tree.collider);
-export const COMPOST_POSITION = [2.95, 0, 2.8] as [number, number, number];
+export const COMPOST_POSITION = [1.2, 0, 3.7] as [number, number, number];
 export const COMPOST_COLLIDER = { x: COMPOST_POSITION[0], z: COMPOST_POSITION[2], radius: 0.36 };
+export const FISHING_SPOT_POSITION = [0, 0, 1.35] as [number, number, number];
 
 export function plotPosition(index: number): [number, number] {
   const row = Math.floor(index / 3);

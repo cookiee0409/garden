@@ -1,4 +1,4 @@
-import { CRITTER_DEFS, CROP_DEFS, FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "./data";
+import { CRITTER_DEFS, CROP_DEFS, FORAGE_DEFS, PET_DEFS, PLOT_UNLOCK_COSTS } from "./data";
 import { findWiltedInventoryKey, formatDuration, getCompostRemainingMs, getCropStatus, hasEmptyCompostSlot } from "./logic";
 import type { GameState, InteractionPrompt, InteractionTarget } from "./types";
 
@@ -8,6 +8,8 @@ export function getTargetKey(target: InteractionTarget): string {
   if (target.kind === "decoration") return `decoration:${target.id}`;
   if (target.kind === "compost") return "compost";
   if (target.kind === "critter") return `critter:${target.id}`;
+  if (target.kind === "pet") return `pet:${target.id}`;
+  if (target.kind === "fishingSpot") return "fishingSpot";
   return `portal:${target.id}`;
 }
 
@@ -63,6 +65,24 @@ export function getInteractionPrompt(game: GameState, target: InteractionTarget,
       targetKey: getTargetKey(target),
       action: "observe",
       label: `${CRITTER_DEFS[target.type].name} 관찰`,
+    };
+  }
+
+  if (target.kind === "pet") {
+    return {
+      target,
+      targetKey: getTargetKey(target),
+      action: "pet",
+      label: `${PET_DEFS[target.id].name} 쓰다듬기`,
+    };
+  }
+
+  if (target.kind === "fishingSpot") {
+    return {
+      target,
+      targetKey: getTargetKey(target),
+      action: "fish",
+      label: game.bait > 0 ? "낚시하기" : "미끼 없음",
     };
   }
 

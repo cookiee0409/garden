@@ -3,7 +3,7 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { Object3D, Vector3 } from "three";
 import type { Group, InstancedMesh, Mesh, MeshBasicMaterial } from "three";
-import { DECOR_DEFS, FORAGE_DEFS, PLOT_UNLOCK_COSTS } from "../game/data";
+import { DECOR_DEFS, FORAGE_DEFS, PET_DEFS, PLOT_UNLOCK_COSTS } from "../game/data";
 import { getInteractionPrompt } from "../game/interactions";
 import {
   formatDuration,
@@ -24,6 +24,7 @@ import type {
   HarvestEffect as HarvestEffectType,
   InteractionPrompt,
   InteractionTarget,
+  PetId,
   PlacedDecoration,
   SceneId,
   SeasonId,
@@ -36,7 +37,9 @@ import {
   CAMERA_OFFSET,
   COMPOST_COLLIDER,
   COMPOST_POSITION,
+  FISHING_SPOT_POSITION,
   FOREST_ISLAND_GEOMETRY,
+  FOREST_POND_PORTAL,
   FOREST_TREES,
   FOREST_TREE_COLLIDERS,
   GARDEN_ISLAND_GEOMETRY,
@@ -49,6 +52,7 @@ import {
   PLAYER_SPEED,
   PLOT_COUNT,
   PLOT_HALF_SIZE,
+  POND_ISLAND_GEOMETRY,
   PORTALS,
   SPAWN_POSITIONS,
   forestPosition,
@@ -65,6 +69,7 @@ const GARDEN_INTERACTION_TARGETS: InteractionTarget[] = [
 ];
 
 const critterPositions = new Map<string, Vector3>();
+const petPositions = new Map<string, Vector3>();
 
 const PLOT_COLLIDERS = Array.from({ length: PLOT_COUNT }, (_, index) => {
   const [x, z] = plotPosition(index);
@@ -77,7 +82,12 @@ function buildForestInteractionTargets(spots: GameState["gather"]["spots"]): Int
     if (!spot.collected) targets.push({ kind: "forage", index });
   });
   targets.push(PORTALS.forest.target);
+  targets.push(FOREST_POND_PORTAL.target);
   return targets;
+}
+
+function buildPondInteractionTargets(): InteractionTarget[] {
+  return [{ kind: "fishingSpot" }, PORTALS.pond.target];
 }
 
 function buildGardenInteractionTargets(game: GameState, activeCritters: ActiveCritter[]): InteractionTarget[] {
@@ -93,6 +103,15 @@ function buildGardenInteractionTargets(game: GameState, activeCritters: ActiveCr
       type: critter.type,
       x: position?.x ?? critter.x,
       z: position?.z ?? critter.z,
+    });
+  });
+  game.pets.forEach((petId) => {
+    const position = petPositions.get(petId);
+    targets.push({
+      kind: "pet",
+      id: petId,
+      x: position?.x ?? -2.6,
+      z: position?.z ?? 2.2,
     });
   });
   return targets;
@@ -167,7 +186,7 @@ function resolveCollisions(position: Vector3, scene: SceneId, game: GameState) {
     }
     resolveCircleCollision(position, COMPOST_COLLIDER.x, COMPOST_COLLIDER.z, COMPOST_COLLIDER.radius);
     resolveDecorationCollisions(position, game.decorations);
-  } else {
+  } else if (scene === "forest") {
     for (const tree of FOREST_TREE_COLLIDERS) {
       resolveCircleCollision(position, tree.x, tree.z, tree.radius);
     }
@@ -215,13 +234,22 @@ function targetPosition(target: InteractionTarget, game: GameState): [number, nu
   if (target.kind === "plot") return plotPosition(target.index);
   if (target.kind === "forage") return forestPosition(target.index);
   if (target.kind === "compost") return [COMPOST_POSITION[0], COMPOST_POSITION[2]];
+  if (target.kind === "fishingSpot") return [FISHING_SPOT_POSITION[0], FISHING_SPOT_POSITION[2]];
   if (target.kind === "critter") return [target.x, target.z];
+  if (target.kind === "pet") return [target.x, target.z];
   if (target.kind === "decoration") {
     const decoration = game.decorations.find((item) => item.id === target.id);
     if (decoration && isDecorationPlaced(decoration)) return [decoration.x, decoration.z];
     return [0, 0];
   }
-  const portal = target.id === "garden-to-forest" ? PORTALS.garden : PORTALS.forest;
+  const portal =
+    target.id === "garden-to-forest"
+      ? PORTALS.garden
+      : target.id === "forest-to-garden"
+        ? PORTALS.forest
+        : target.id === "forest-to-pond"
+          ? FOREST_POND_PORTAL
+          : PORTALS.pond;
   return [portal.position[0], portal.position[2]];
 }
 
@@ -407,7 +435,9 @@ function PlayerController() {
     const targets =
       sceneRef.current === "garden"
         ? buildGardenInteractionTargets(gameRef.current, activeCrittersRef.current)
-        : buildForestInteractionTargets(gameRef.current.gather.spots);
+        : sceneRef.current === "forest"
+          ? buildForestInteractionTargets(gameRef.current.gather.spots)
+          : buildPondInteractionTargets();
     const prompt = placementId ? null : nearestInteraction(gameRef.current, targets, player.current.position, nowRef.current);
     nearbyRef.current = prompt;
     setNearbyInteraction(prompt);
@@ -692,6 +722,7 @@ function GardenWorld({ palette, night }: { palette: ScenePalette; night: boolean
   const game = useGameStore((store) => store.game);
   const harvestEffects = useGameStore((store) => store.harvestEffects);
   const activeCritters = useGameStore((store) => store.activeCritters);
+  const petHeartPulses = useGameStore((store) => store.petHeartPulses);
   const litLampIds = game.decorations
     .filter((decoration) => decoration.type === "lamp" && isDecorationPlaced(decoration))
     .slice(0, 4)
@@ -721,6 +752,9 @@ function GardenWorld({ palette, night }: { palette: ScenePalette; night: boolean
       ))}
       {activeCritters.map((critter) => (
         <CritterAgent critter={critter} key={critter.id} />
+      ))}
+      {game.pets.map((petId, index) => (
+        <PetAgent heartPulse={petHeartPulses[petId] || 0} index={index} key={petId} petId={petId} />
       ))}
       {Array.from({ length: PLOT_COUNT }, (_, index) => (
         <PlotTile key={index} index={index} />
@@ -851,13 +885,61 @@ function CritterAgent({ critter }: { critter: ActiveCritter }) {
       group.current.rotation.y = angleLerp(group.current.rotation.y, Math.atan2(dx, dz), Math.min(1, delta * 5));
     }
     current.y = (critter.type === "butterfly" ? 0.34 : 0.08) + Math.sin(state.clock.elapsedTime * 2.2 + critter.seed) * 0.035;
-    critterPositions.set(critter.id, current.clone());
+    const registered = critterPositions.get(critter.id);
+    if (registered) registered.copy(current);
   });
 
   return (
     <group ref={group} position={[critter.x, 0.08, critter.z]} scale={critter.type === "butterfly" ? 1.05 : 1}>
       <CritterModel type={critter.type} />
       {critter.heartPulse > 0 && <HeartBurst key={critter.heartPulse} />}
+    </group>
+  );
+}
+
+function petStartPosition(petId: PetId, index: number): Vector3 {
+  const angle = index * 1.35 + petId.length * 0.2;
+  return new Vector3(Math.cos(angle) * 2.35, 0.08, 1.15 + Math.sin(angle) * 1.6);
+}
+
+function PetAgent({ petId, index, heartPulse }: { petId: PetId; index: number; heartPulse: number }) {
+  const group = useRef<Group>(null);
+  const start = useMemo(() => petStartPosition(petId, index), [index, petId]);
+  const target = useRef(start.clone());
+  const pet = PET_DEFS[petId];
+
+  useEffect(() => {
+    petPositions.set(petId, start.clone());
+    return () => {
+      petPositions.delete(petId);
+    };
+  }, [petId, start]);
+
+  useFrame((state, delta) => {
+    if (!group.current) return;
+    const current = group.current.position;
+    if (current.distanceTo(target.current) < 0.08) {
+      target.current = pickCritterWanderTarget(current);
+    }
+    const dx = target.current.x - current.x;
+    const dz = target.current.z - current.z;
+    const length = Math.hypot(dx, dz);
+    if (length > 0.001) {
+      current.x += (dx / length) * 0.22 * delta;
+      current.z += (dz / length) * 0.22 * delta;
+      group.current.rotation.y = angleLerp(group.current.rotation.y, Math.atan2(dx, dz), Math.min(1, delta * 5));
+    }
+    current.y = 0.08 + Math.sin(state.clock.elapsedTime * 1.8 + index) * 0.025;
+    const registered = petPositions.get(petId);
+    if (registered) registered.copy(current);
+  });
+
+  if (!pet) return null;
+
+  return (
+    <group ref={group} position={[start.x, start.y, start.z]} scale={0.96}>
+      <CritterModel type={pet.model} />
+      {heartPulse > 0 && <HeartBurst key={heartPulse} />}
     </group>
   );
 }
@@ -881,12 +963,13 @@ function Tree({ position, scale = 1, palette }: { position: [number, number, num
   );
 }
 
-function PortalSign({ scene }: { scene: SceneId }) {
-  const portal = PORTALS[scene];
+function PortalSign({ scene, portal = PORTALS[scene] }: { scene: SceneId; portal?: (typeof PORTALS)[SceneId] | typeof FOREST_POND_PORTAL }) {
   const [x, y, z] = portal.position;
+  const frontOffset = z >= 0 ? 0.18 : -0.18;
+  const labelOffset = z >= 0 ? 0.07 : -0.07;
   return (
     <group position={[x, y, z]}>
-      <mesh position={[0, 0.025, scene === "garden" ? 0.18 : -0.18]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[0, 0.025, frontOffset]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[1.1, 0.62]} />
         <meshStandardMaterial color="#d5b181" transparent opacity={0.92} />
       </mesh>
@@ -898,7 +981,7 @@ function PortalSign({ scene }: { scene: SceneId }) {
         <boxGeometry args={[0.72, 0.28, 0.08]} />
         <meshStandardMaterial color="#b98258" flatShading />
       </mesh>
-      <Html center position={[0, 0.79, scene === "garden" ? 0.07 : -0.07]} style={{ pointerEvents: "none" }}>
+      <Html center position={[0, 0.79, labelOffset]} style={{ pointerEvents: "none" }}>
         <span className="portal-tag">{portal.sign}</span>
       </Html>
     </group>
@@ -1183,6 +1266,7 @@ function ForestWorld({ palette }: { palette: ScenePalette }) {
         <Tree key={`${tree.position[0]}:${tree.position[2]}`} position={tree.position} scale={tree.scale} palette={palette} />
       ))}
       <PortalSign scene="forest" />
+      <PortalSign scene="forest" portal={FOREST_POND_PORTAL} />
       {game.gather.spots.map((spot, index) => (
         <ForageSpot index={index} key={spot.id} />
       ))}
@@ -1198,6 +1282,67 @@ function ForestWorld({ palette }: { palette: ScenePalette }) {
           </div>
         </Html>
       )}
+    </>
+  );
+}
+
+function FishingSpot() {
+  const game = useGameStore((store) => store.game);
+  const fishing = useGameStore((store) => store.fishing);
+  const now = useGameStore((store) => store.now);
+  const label =
+    fishing.phase === "bite"
+      ? "입질!"
+      : fishing.phase === "waiting" && fishing.biteAt
+        ? formatDuration(Math.max(0, fishing.biteAt - now))
+        : game.bait > 0
+          ? `미끼 ${game.bait}개`
+          : "미끼 없음";
+
+  return (
+    <group position={FISHING_SPOT_POSITION}>
+      <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.36, 0.46, 28]} />
+        <meshBasicMaterial color={fishing.phase === "bite" ? "#f2bc46" : "#d8f2ff"} transparent opacity={0.75} />
+      </mesh>
+      <mesh position={[0, 0.13, 0.18]} rotation={[0.45, 0, 0]}>
+        <cylinderGeometry args={[0.018, 0.024, 0.86, 6]} />
+        <meshStandardMaterial color="#7b5a43" />
+      </mesh>
+      <mesh position={[0.2, 0.21, -0.24]}>
+        <sphereGeometry args={[0.055, 8, 6]} />
+        <meshStandardMaterial color={fishing.phase === "bite" ? "#ef6d79" : "#ffffff"} emissive={fishing.phase === "bite" ? "#ef6d79" : "#000000"} emissiveIntensity={0.35} />
+      </mesh>
+      <Html center position={[0, 0.8, 0]} style={{ pointerEvents: "none" }}>
+        <span className={`plot-tag ${fishing.phase === "bite" ? "plot-tag--ready" : ""}`}>{label}</span>
+      </Html>
+    </group>
+  );
+}
+
+function PondWorld({ palette }: { palette: ScenePalette }) {
+  return (
+    <>
+      <mesh position={[0, -0.18, 0]}>
+        <cylinderGeometry args={POND_ISLAND_GEOMETRY.top} />
+        <meshStandardMaterial color={palette.forestGrass} flatShading />
+      </mesh>
+      <mesh position={[0, -0.45, 0]}>
+        <cylinderGeometry args={POND_ISLAND_GEOMETRY.bottom} />
+        <meshStandardMaterial color={palette.forestSide} flatShading />
+      </mesh>
+      <mesh position={[0, 0.02, 1.05]} scale={[1.35, 0.12, 1]}>
+        <sphereGeometry args={[1.28, 28, 12]} />
+        <meshStandardMaterial color="#7fc8d8" transparent opacity={0.82} />
+      </mesh>
+      <mesh position={[0, 0.09, 0.08]}>
+        <boxGeometry args={[1.5, 0.12, 0.5]} />
+        <meshStandardMaterial color="#b98258" />
+      </mesh>
+      <Tree position={[-3.7, 0, 0.8]} scale={0.82} palette={palette} />
+      <Tree position={[3.55, 0, -0.45]} scale={0.78} palette={palette} />
+      <PortalSign scene="pond" />
+      <FishingSpot />
     </>
   );
 }
@@ -1238,7 +1383,13 @@ export function GardenScene() {
       <directionalLight position={[4, 8, 4]} intensity={night ? 0.56 : 1.1} color={night ? "#bcd4ff" : "#ffffff"} />
       <SunOrMoon night={night} />
       <SeasonalParticles season={season} weather={weather} />
-      {scene === "garden" ? <GardenWorld palette={palette} night={night} /> : <ForestWorld palette={palette} />}
+      {scene === "garden" ? (
+        <GardenWorld palette={palette} night={night} />
+      ) : scene === "forest" ? (
+        <ForestWorld palette={palette} />
+      ) : (
+        <PondWorld palette={palette} />
+      )}
       <PlayerController />
     </Canvas>
   );
