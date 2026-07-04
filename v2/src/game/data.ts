@@ -1,8 +1,8 @@
-import type { BalanceId, CodexReward, CropDef, ForageDef, QualityDef, QualityId } from "./types";
+import type { BalanceId, CodexReward, CritterDef, CropDef, DecorationDef, ForageDef, QualityDef, QualityId } from "./types";
 
 export const SAVE_KEY = "mini-idle-garden-save-v1";
 export const BALANCE_STORAGE_KEY = "mini-idle-garden-balance";
-export const CURRENT_SAVE_VERSION = 2;
+export const CURRENT_SAVE_VERSION = 3;
 
 export const BALANCE_PRESETS: Record<
   BalanceId,
@@ -12,6 +12,12 @@ export const BALANCE_PRESETS: Record<
     cropGrowMs: Record<string, number>;
     gatherRefillMs: number;
     wiltAfterMs: number;
+    compostMs: number;
+    critterCheckMinMs: number;
+    critterCheckMaxMs: number;
+    critterStayMinMs: number;
+    critterStayMaxMs: number;
+    critterTraceOfflineMs: number;
   }
 > = {
   demo: {
@@ -28,6 +34,12 @@ export const BALANCE_PRESETS: Record<
     },
     gatherRefillMs: 5 * 60 * 1000,
     wiltAfterMs: 45 * 60 * 1000,
+    compostMs: 3 * 60 * 1000,
+    critterCheckMinMs: 90 * 1000,
+    critterCheckMaxMs: 180 * 1000,
+    critterStayMinMs: 30 * 1000,
+    critterStayMaxMs: 60 * 1000,
+    critterTraceOfflineMs: 10 * 60 * 1000,
   },
   live: {
     id: "live",
@@ -43,6 +55,12 @@ export const BALANCE_PRESETS: Record<
     },
     gatherRefillMs: 6 * 60 * 60 * 1000,
     wiltAfterMs: 24 * 60 * 60 * 1000,
+    compostMs: 6 * 60 * 60 * 1000,
+    critterCheckMinMs: 15 * 60 * 1000,
+    critterCheckMaxMs: 30 * 60 * 1000,
+    critterStayMinMs: 3 * 60 * 1000,
+    critterStayMaxMs: 8 * 60 * 1000,
+    critterTraceOfflineMs: 6 * 60 * 60 * 1000,
   },
 };
 
@@ -51,6 +69,7 @@ export const BALANCE_LABEL = BALANCE_PRESETS[BALANCE_ID].label;
 export const OFFLINE_GROWTH_CAP_MS = 12 * 60 * 60 * 1000;
 export const WILT_AFTER_MS = BALANCE_PRESETS[BALANCE_ID].wiltAfterMs;
 export const GATHER_REFILL_MS = BALANCE_PRESETS[BALANCE_ID].gatherRefillMs;
+export const COMPOST_MS = BALANCE_PRESETS[BALANCE_ID].compostMs;
 
 export const CROP_DEFS: Record<string, CropDef> = {
   tomato: {
@@ -141,6 +160,27 @@ export const FORAGE_DEFS: Record<string, ForageDef> = {
   wildflower: { id: "wildflower", name: "들꽃", sellPrice: 16, symbol: "꽃", weight: 28 },
   clover: { id: "clover", name: "네잎클로버", sellPrice: 45, symbol: "클", weight: 8 },
   firefly: { id: "firefly", name: "밤빛 조각", sellPrice: 64, symbol: "밤", weight: 4, nightOnly: true },
+  cherry_petal: { id: "cherry_petal", name: "벚꽃잎", sellPrice: 58, symbol: "봄", weight: 4, season: "spring" },
+  cicada_shell: { id: "cicada_shell", name: "매미 허물", sellPrice: 60, symbol: "여", weight: 4, season: "summer" },
+  acorn: { id: "acorn", name: "도토리", sellPrice: 62, symbol: "가", weight: 4, season: "autumn" },
+  snow_crystal: { id: "snow_crystal", name: "눈꽃 조각", sellPrice: 66, symbol: "겨", weight: 4, season: "winter" },
+};
+
+export const DECOR_DEFS: Record<string, DecorationDef> = {
+  fence: { id: "fence", name: "울타리", cost: 60, cozy: 2, colliderRadius: 0.28 },
+  flower_pot: { id: "flower_pot", name: "화분", cost: 90, cozy: 3, colliderRadius: 0.24 },
+  bench: { id: "bench", name: "벤치", cost: 160, cozy: 5, colliderRadius: 0.38 },
+  lamp: { id: "lamp", name: "가로등", cost: 220, cozy: 6, colliderRadius: 0.26 },
+  mini_pond: { id: "mini_pond", name: "미니 연못", cost: 320, cozy: 8, colliderRadius: 0.48 },
+};
+
+export const CRITTER_DEFS: Record<string, CritterDef> = {
+  butterfly: { id: "butterfly", name: "나비", note: "낮에 꽃 작물이 있으면 찾아옵니다." },
+  sparrow: { id: "sparrow", name: "참새", note: "낮에 물 준 밭이 많으면 내려앉습니다." },
+  rabbit: { id: "rabbit", name: "토끼", note: "낮에 당근 냄새를 맡고 옵니다." },
+  frog: { id: "frog", name: "개구리", note: "비나 눈이 오는 날 폴짝입니다." },
+  hedgehog: { id: "hedgehog", name: "고슴도치", note: "밤의 아늑한 정원을 좋아합니다." },
+  owl: { id: "owl", name: "부엉이", note: "밤이면 나무 곁에서 조용히 지켜봅니다." },
 };
 
 export const PLOT_UNLOCK_COSTS = [0, 0, 0, 0, 120, 170, 240, 330, 460];
@@ -161,6 +201,7 @@ export const CODEX_REWARDS: CodexReward[] = [
   { id: "3", required: 3, title: "새싹 연구 보상", description: "방울토마토 씨앗 2개와 딸기 씨앗 1개" },
   { id: "6", required: 6, title: "정원 기록 보상", description: "골드 140과 황금 물뿌리개 1회" },
   { id: "10", required: 10, title: "수집가 보상", description: "수박·달빛버섯·무지개꽃 씨앗 1개와 골드 220" },
+  { id: "20", required: 20, title: "정원의 친구 보상", description: "골드 500과 황금 물뿌리개 1회" },
 ];
 
 function resolveBalanceId(): BalanceId {

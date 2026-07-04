@@ -494,6 +494,26 @@ h3 {
   gap: 9px;
 }
 
+.shop-subheading,
+.codex-section-title {
+  margin: 14px 0 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.owned-decor-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.owned-decor-list > small {
+  color: var(--muted);
+}
+
 .list-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -536,6 +556,28 @@ h3 {
   font-weight: 800;
 }
 
+.plot-details--compost {
+  align-items: stretch;
+}
+
+.compost-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.compost-slot {
+  display: inline-flex;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.64);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .quality-normal { color: #517067; }
 .quality-silver { color: #6a7f94; }
 .quality-gold { color: #a87413; }
@@ -556,7 +598,11 @@ h3 {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 7px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.codex-section + .codex-section {
+  margin-top: 4px;
 }
 
 .codex-tile {

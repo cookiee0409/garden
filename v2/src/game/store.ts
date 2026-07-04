@@ -1,29 +1,55 @@
 import { create } from "zustand";
-import { CODEX_REWARDS, CROP_DEFS, FERTILIZER_RECIPE, GATHER_REFILL_MS, PLOT_UNLOCK_COSTS, QUALITY_DEFS, SAVE_KEY } from "./data";
+import {
+  BALANCE_PRESETS,
+  CODEX_REWARDS,
+  CRITTER_DEFS,
+  CROP_DEFS,
+  DECOR_DEFS,
+  FERTILIZER_RECIPE,
+  GATHER_REFILL_MS,
+  PLOT_UNLOCK_COSTS,
+  QUALITY_DEFS,
+  SAVE_KEY,
+} from "./data";
 import { isSameTarget } from "./interactions";
 import {
   addCodex,
   addInventory,
   applyDailyLogin,
   applyGatherRefill,
+  applyDailyWeatherEffects,
   applyOfflineGrowthCap,
   createDefaultState,
   ensureDailyVisitor,
   findInventoryCropKey,
+  findWiltedInventoryKey,
   formatDuration,
+  getCompostReadyCount,
+  getCompostRemainingMs,
   getCodexCount,
+  getCoziness,
   getCropStatus,
+  getCritterTrace,
   getDayKey,
   getGatherRemainingMs,
   getItemInfo,
+  getVisitorBonus,
+  getWeather,
+  getWeatherName,
+  hasEmptyCompostSlot,
   makeGatherSpots,
+  makeDecorationId,
   makeItemKey,
   mergeSavedState,
+  pickCritterType,
   rollQuality,
 } from "./logic";
 import { migrate } from "./save";
 import type {
   CareEffect,
+  ActiveCritter,
+  CritterType,
+  DecorationType,
   GameState,
   HarvestEffect,
   InteractionPrompt,
@@ -64,12 +90,18 @@ function buildWelcomeSummary(game: GameState, now: number): WelcomeSummary | nul
     .filter((plot) => plot.crop)
     .map((plot) => getCropStatus(plot, now));
 
+  const weather = getWeather(now);
+  const critterTraceThreshold = BALANCE_PRESETS[game.balanceId]?.critterTraceOfflineMs ?? BALANCE_PRESETS.demo.critterTraceOfflineMs;
+
   return {
     offlineMs,
     readyCrops: cropStatuses.filter((status) => status.isReady && !status.wilted).length,
     wiltedCrops: cropStatuses.filter((status) => status.wilted).length,
     gatherRefilled: game.gather.charges < 2 && now - game.gather.lastRefillAt >= GATHER_REFILL_MS,
     dailyReward: game.lastLoginDate !== getDayKey(now),
+    weatherNotice: weather === "clear" ? "오늘은 맑습니다." : `오늘은 ${getWeatherName(weather)} 소식이 있습니다.`,
+    critterTrace: offlineMs >= critterTraceThreshold ? getCritterTrace(game, offlineMs, now) : null,
+    compostReadyCount: getCompostReadyCount(game, now),
   };
 }
 
@@ -81,6 +113,8 @@ function bootGame(): { game: GameState; messages: string[]; welcomeSummary: Welc
 
   applyOfflineGrowthCap(game, now);
   messages.push(...applyDailyLogin(game, now));
+  const weatherMessage = applyDailyWeatherEffects(game, now);
+  if (weatherMessage) messages.push(weatherMessage);
   if (applyGatherRefill(game, now)) {
     messages.push("숲 입구 채집 기회가 다시 채워졌습니다.");
   }
@@ -101,8 +135,10 @@ interface GameStore {
   welcomeSummary: WelcomeSummary | null;
   harvestEffects: HarvestEffect[];
   careEffects: CareEffect[];
+  activeCritters: ActiveCritter[];
   nearbyInteraction: InteractionPrompt | null;
   selectedForage: number | null;
+  placementDecorationId: string | null;
   playerSpawn: { id: PlayerSpawnId; version: number };
   interactionCooldownUntil: number;
   showToast: (message: string) => void;
@@ -126,14 +162,69 @@ interface GameStore {
   useGoldenWater: (index: number) => void;
   useFertilizer: (index: number) => void;
   craftFertilizer: () => void;
+  buyDecoration: (type: DecorationType) => void;
+  startDecorationPlacement: (id: string) => void;
+  cancelDecorationPlacement: () => void;
+  placeDecoration: (id: string, x: number, z: number, rotY: number) => void;
+  pickupDecoration: (id: string) => void;
+  observeCritter: (id: string) => void;
+  addWiltedToCompost: () => void;
+  collectCompost: (index: number) => void;
+  performCompostAction: () => void;
   resetGame: () => void;
 }
 
 let nextToastId = 1;
 let nextEffectId = 1;
 
+function randomBetween(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+function getCritterCheckDelay(game: GameState): number {
+  const balance = BALANCE_PRESETS[game.balanceId] ?? BALANCE_PRESETS.demo;
+  return randomBetween(balance.critterCheckMinMs, balance.critterCheckMaxMs);
+}
+
+function getCritterStayMs(game: GameState): number {
+  const balance = BALANCE_PRESETS[game.balanceId] ?? BALANCE_PRESETS.demo;
+  return randomBetween(balance.critterStayMinMs, balance.critterStayMaxMs);
+}
+
+function randomCritterSpawn(type: CritterType): { x: number; z: number } {
+  if (type === "owl") {
+    return Math.random() > 0.5 ? { x: -3.75, z: -0.75 } : { x: 3.75, z: 0.75 };
+  }
+
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = randomBetween(1.8, 3.45);
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    const nearPlotGrid = Math.abs(x) < 2.35 && Math.abs(z) < 2.35;
+    if (!nearPlotGrid) return { x, z };
+  }
+
+  return { x: 2.7, z: -2.3 };
+}
+
+function makeActiveCritter(type: CritterType, game: GameState, now = Date.now()): ActiveCritter {
+  const position = randomCritterSpawn(type);
+  return {
+    id: `critter-${type}-${now}-${Math.floor(Math.random() * 100000)}`,
+    type,
+    spawnedAt: now,
+    leaveAt: now + getCritterStayMs(game),
+    seed: Math.random() * 1000,
+    x: position.x,
+    z: position.z,
+    heartPulse: 0,
+  };
+}
+
 export const useGameStore = create<GameStore>((set, get) => {
   const { game, messages, welcomeSummary } = bootGame();
+  let nextCritterCheckAt = Date.now() + getCritterCheckDelay(game);
 
   const commit = (next: GameState) => {
     writeSave(next);
@@ -187,6 +278,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       game: next,
       nearbyInteraction: null,
       selectedForage: null,
+      placementDecorationId: null,
       playerSpawn: { id: spawnForScene(scene), version: store.playerSpawn.version + 1 },
       interactionCooldownUntil: Date.now() + SCENE_INTERACTION_COOLDOWN_MS,
     }));
@@ -260,10 +352,10 @@ export const useGameStore = create<GameStore>((set, get) => {
         type: crop.id,
         plantedAt: now,
         boostMs: 0,
-        watered: false,
+        watered: getWeather(now) !== "clear",
         fertilized: false,
       };
-      showToast(`${crop.name}을 심었습니다.`);
+      showToast(getWeather(now) !== "clear" ? `${crop.name}을 심었습니다. 날씨 덕분에 흙이 이미 촉촉합니다.` : `${crop.name}을 심었습니다.`);
       commit(next);
       return;
     }
@@ -314,6 +406,21 @@ export const useGameStore = create<GameStore>((set, get) => {
       switchSceneTo(target.to);
       return;
     }
+    if (target.kind === "decoration") {
+      if (checkNearby && !requireNearby(target)) return;
+      get().pickupDecoration(target.id);
+      return;
+    }
+    if (target.kind === "compost") {
+      if (checkNearby && !requireNearby(target)) return;
+      get().performCompostAction();
+      return;
+    }
+    if (target.kind === "critter") {
+      if (checkNearby && !requireNearby(target)) return;
+      get().observeCritter(target.id);
+      return;
+    }
     if (target.kind === "plot") {
       runPlotAction(target.index, checkNearby);
       return;
@@ -326,6 +433,25 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ now });
 
     const current = get().game;
+    const activeCritters = get().activeCritters;
+    const livingCritters = activeCritters.filter((critter) => critter.leaveAt > now);
+    if (livingCritters.length !== activeCritters.length) {
+      set({ activeCritters: livingCritters });
+    }
+
+    if (now >= nextCritterCheckAt) {
+      nextCritterCheckAt = now + getCritterCheckDelay(current);
+      const currentActive = get().activeCritters;
+      const chance = Math.min(0.65, 0.35 + getCoziness(current) * 0.01);
+      if (current.scene === "garden" && currentActive.length < 2 && Math.random() < chance) {
+        const type = pickCritterType(current, now);
+        if (type) {
+          set({ activeCritters: [...currentActive, makeActiveCritter(type, current, now)] });
+          showToast(`${CRITTER_DEFS[type].name}가 정원에 찾아왔습니다.`);
+        }
+      }
+    }
+
     const needsRefill =
       current.gather.lastRefillAt > now ||
       (current.gather.charges < 2 && now - current.gather.lastRefillAt >= GATHER_REFILL_MS);
@@ -333,11 +459,17 @@ export const useGameStore = create<GameStore>((set, get) => {
       !current.dailyVisitor ||
       current.dailyVisitor.date !== getDayKey(now) ||
       current.dailyVisitor.bonus !== 1.5;
-    if (!needsRefill && !needsVisitor) return;
+    const needsWeather = getWeather(now) !== "clear" && current.lastRainWateredDate !== getDayKey(now);
+    if (!needsRefill && !needsVisitor && !needsWeather) return;
 
     const next = structuredClone(current);
     let changed = applyGatherRefill(next, now);
     if (ensureDailyVisitor(next, now)) changed = true;
+    const weatherMessage = applyDailyWeatherEffects(next, now);
+    if (weatherMessage) {
+      changed = true;
+      showToast(weatherMessage);
+    }
     if (changed) commit(next);
   }, 1000);
 
@@ -352,8 +484,10 @@ export const useGameStore = create<GameStore>((set, get) => {
     welcomeSummary,
     harvestEffects: [],
     careEffects: [],
+    activeCritters: [],
     nearbyInteraction: null,
     selectedForage: null,
+    placementDecorationId: null,
     playerSpawn: { id: "garden-default", version: 0 },
     interactionCooldownUntil: 0,
     showToast,
@@ -488,7 +622,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       }
 
       const item = getItemInfo(key);
-      const reward = Math.round(item.sellPrice * visitor.bonus);
+      const reward = Math.round(item.sellPrice * getVisitorBonus(next));
       next.inventory[key] -= 1;
       if (next.inventory[key] <= 0) delete next.inventory[key];
       next.gold += reward;
@@ -532,6 +666,10 @@ export const useGameStore = create<GameStore>((set, get) => {
         addSeed(next, "moon_mushroom", 1);
         addSeed(next, "rainbow_flower", 1);
         next.gold += 220;
+      }
+      if (rewardId === "20") {
+        next.gold += 500;
+        next.goldenWater = Math.min(3, next.goldenWater + 1);
       }
 
       next.claimedRewards.push(rewardId);
@@ -617,6 +755,144 @@ export const useGameStore = create<GameStore>((set, get) => {
       commit(next);
     },
 
+    buyDecoration: (type) => {
+      const decor = DECOR_DEFS[type];
+      if (!decor) return;
+
+      const next = structuredClone(get().game);
+      if (next.gold < decor.cost) {
+        showToast("장식을 사기엔 골드가 부족합니다.");
+        return;
+      }
+
+      next.gold -= decor.cost;
+      next.decorations.push({
+        id: makeDecorationId(type),
+        type,
+        x: null,
+        z: null,
+        rotY: 0,
+      });
+      showToast(`${decor.name}을 샀습니다. 보유 목록에서 배치할 수 있습니다.`);
+      commit(next);
+    },
+
+    startDecorationPlacement: (id) => {
+      const current = get().game;
+      const decoration = current.decorations.find((item) => item.id === id);
+      if (!decoration) return;
+      if (decoration.x !== null && decoration.z !== null) {
+        showToast("이미 설치된 장식입니다.");
+        return;
+      }
+
+      if (current.scene !== "garden") switchSceneTo("garden");
+      set({ placementDecorationId: id, nearbyInteraction: null });
+      showToast(`${DECOR_DEFS[decoration.type].name} 배치 모드입니다. E로 설치하고 ESC로 취소합니다.`);
+    },
+
+    cancelDecorationPlacement: () => {
+      if (!get().placementDecorationId) return;
+      set({ placementDecorationId: null });
+      showToast("장식 배치를 취소했습니다.");
+    },
+
+    placeDecoration: (id, x, z, rotY) => {
+      const next = structuredClone(get().game);
+      const decoration = next.decorations.find((item) => item.id === id);
+      if (!decoration) return;
+      decoration.x = x;
+      decoration.z = z;
+      decoration.rotY = rotY;
+      showToast(`${DECOR_DEFS[decoration.type].name}을 설치했습니다.`);
+      commit(next);
+      set({ placementDecorationId: null });
+    },
+
+    pickupDecoration: (id) => {
+      if (!requireNearby({ kind: "decoration", id })) return;
+      const next = structuredClone(get().game);
+      const decoration = next.decorations.find((item) => item.id === id);
+      if (!decoration) return;
+
+      decoration.x = null;
+      decoration.z = null;
+      decoration.rotY = 0;
+      showToast(`${DECOR_DEFS[decoration.type].name}을 회수했습니다.`);
+      commit(next);
+      set({ nearbyInteraction: null });
+    },
+
+    observeCritter: (id) => {
+      const critter = get().activeCritters.find((item) => item.id === id);
+      if (!critter) return;
+
+      const key = makeItemKey("critter", critter.type, "normal");
+      const current = get().game;
+      const firstObservation = !current.codex[key];
+      if (firstObservation) {
+        const next = structuredClone(current);
+        addCodex(next, key, Date.now());
+        next.gold += 30;
+        commit(next);
+      }
+
+      set((store) => ({
+        activeCritters: store.activeCritters.map((item) => (item.id === id ? { ...item, heartPulse: item.heartPulse + 1 } : item)),
+      }));
+      showToast(firstObservation ? `${CRITTER_DEFS[critter.type].name}를 도감에 기록하고 30G를 받았습니다.` : `${CRITTER_DEFS[critter.type].name}가 반가워합니다.`);
+    },
+
+    addWiltedToCompost: () => {
+      if (!requireNearby({ kind: "compost" })) return;
+      const next = structuredClone(get().game);
+      if (!hasEmptyCompostSlot(next)) {
+        showToast("퇴비함 슬롯이 가득 찼습니다.");
+        return;
+      }
+
+      const itemKey = findWiltedInventoryKey(next);
+      if (!itemKey) {
+        showToast("넣을 시든 작물이 없습니다.");
+        return;
+      }
+
+      const slotIndex = next.compost.slots.findIndex((slot) => slot === null);
+      next.inventory[itemKey] -= 1;
+      if (next.inventory[itemKey] <= 0) delete next.inventory[itemKey];
+      next.compost.slots[slotIndex] = { itemKey, startedAt: Date.now() };
+      showToast("시든 작물을 퇴비함에 넣었습니다.");
+      commit(next);
+    },
+
+    collectCompost: (index) => {
+      if (!requireNearby({ kind: "compost" })) return;
+      const next = structuredClone(get().game);
+      const slot = next.compost.slots[index];
+      if (!slot) return;
+
+      const remaining = getCompostRemainingMs(slot, Date.now());
+      if (remaining > 0) {
+        showToast(`퇴비가 완성되려면 ${formatDuration(remaining)} 남았습니다.`);
+        return;
+      }
+
+      next.compost.slots[index] = null;
+      next.fertilizer += 1;
+      showToast("완성된 퇴비를 비료 1개로 수거했습니다.");
+      commit(next);
+    },
+
+    performCompostAction: () => {
+      const game = get().game;
+      const readyIndex = game.compost.slots.findIndex((slot) => slot && getCompostRemainingMs(slot, Date.now()) <= 0);
+      if (readyIndex >= 0) {
+        get().collectCompost(readyIndex);
+        return;
+      }
+      get().addWiltedToCompost();
+    },
+
     resetGame: () => {
       const confirmed = window.confirm("현재 저장된 정원을 지우고 처음부터 시작할까요?");
       if (!confirmed) return;
@@ -630,16 +906,20 @@ export const useGameStore = create<GameStore>((set, get) => {
       const now = Date.now();
       const fresh = createDefaultState(now);
       applyDailyLogin(fresh, now);
+      applyDailyWeatherEffects(fresh, now);
       ensureDailyVisitor(fresh, now);
       writeSave(fresh);
+      nextCritterCheckAt = now + getCritterCheckDelay(fresh);
       set({
         game: fresh,
         now,
         welcomeSummary: null,
         harvestEffects: [],
         careEffects: [],
+        activeCritters: [],
         nearbyInteraction: null,
         selectedForage: null,
+        placementDecorationId: null,
         playerSpawn: { id: "garden-default", version: 0 },
         interactionCooldownUntil: 0,
       });

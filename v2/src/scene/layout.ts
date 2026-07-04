@@ -57,6 +57,8 @@ export const FOREST_TREES = [
 
 export const GARDEN_TREE_COLLIDERS = GARDEN_TREES.map((tree) => tree.collider);
 export const FOREST_TREE_COLLIDERS = FOREST_TREES.map((tree) => tree.collider);
+export const COMPOST_POSITION = [2.95, 0, 2.8] as [number, number, number];
+export const COMPOST_COLLIDER = { x: COMPOST_POSITION[0], z: COMPOST_POSITION[2], radius: 0.36 };
 
 export function plotPosition(index: number): [number, number] {
   const row = Math.floor(index / 3);

@@ -1,7 +1,10 @@
 import {
   BALANCE_ID,
+  COMPOST_MS,
+  CRITTER_DEFS,
   CROP_DEFS,
   CURRENT_SAVE_VERSION,
+  DECOR_DEFS,
   FORAGE_DEFS,
   FORAGE_POSITIONS,
   GATHER_REFILL_MS,
@@ -12,13 +15,19 @@ import {
 } from "./data";
 import type {
   CodexEntry,
+  CompostState,
   CropState,
   CropStatus,
+  CritterType,
+  DecorationType,
   GameState,
   GatherSpot,
   ItemInfo,
+  PlacedDecoration,
   PlotState,
   QualityId,
+  SeasonId,
+  WeatherId,
 } from "./types";
 
 export function createDefaultState(now = Date.now()): GameState {
@@ -56,6 +65,11 @@ export function createDefaultState(now = Date.now()): GameState {
       spots: makeGatherSpots(now),
     },
     dailyVisitor: null,
+    lastRainWateredDate: null,
+    decorations: [],
+    compost: {
+      slots: [null, null],
+    },
     createdAt: now,
     lastSeenAt: now,
   };
@@ -70,6 +84,43 @@ export function sanitizeCrop(crop: Partial<CropState> | null | undefined, now = 
     boostMs: typeof crop.boostMs === "number" ? crop.boostMs : 0,
     watered: Boolean(crop.watered),
     fertilized: Boolean(crop.fertilized),
+  };
+}
+
+export function sanitizeDecorations(decorations: unknown): PlacedDecoration[] {
+  if (!Array.isArray(decorations)) return [];
+  return decorations
+    .map((decoration): PlacedDecoration | null => {
+      if (!decoration || typeof decoration !== "object") return null;
+      const item = decoration as Partial<PlacedDecoration>;
+      if (!item.id || typeof item.id !== "string") return null;
+      if (!item.type || !DECOR_DEFS[item.type]) return null;
+
+      const x = typeof item.x === "number" && Number.isFinite(item.x) ? item.x : null;
+      const z = typeof item.z === "number" && Number.isFinite(item.z) ? item.z : null;
+      const rotY = typeof item.rotY === "number" && Number.isFinite(item.rotY) ? item.rotY : 0;
+      return { id: item.id, type: item.type as DecorationType, x, z, rotY };
+    })
+    .filter((decoration): decoration is PlacedDecoration => Boolean(decoration));
+}
+
+export function sanitizeCompost(compost: unknown, now = Date.now()): CompostState {
+  const slots = compost && typeof compost === "object" && Array.isArray((compost as CompostState).slots)
+    ? (compost as CompostState).slots
+    : [];
+
+  return {
+    slots: Array.from({ length: 2 }, (_, index) => {
+      const slot = slots[index];
+      if (!slot || typeof slot !== "object") return null;
+      const itemKey = (slot as { itemKey?: unknown }).itemKey;
+      const startedAt = (slot as { startedAt?: unknown }).startedAt;
+      if (typeof itemKey !== "string" || !itemKey.startsWith("crop|") || !itemKey.endsWith("|wilted")) return null;
+      return {
+        itemKey,
+        startedAt: typeof startedAt === "number" && Number.isFinite(startedAt) ? Math.min(startedAt, now) : now,
+      };
+    }),
   };
 }
 
@@ -92,6 +143,8 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
       ...base.gather,
       ...(saved.gather || {}),
     },
+    decorations: sanitizeDecorations(saved.decorations),
+    compost: sanitizeCompost(saved.compost, now),
   };
 
   merged.plots = merged.plots.map((plot: PlotState, index: number) => ({
@@ -109,6 +162,9 @@ export function mergeSavedState(saved: Partial<GameState> | null, now = Date.now
   if (typeof merged.goldenWater !== "number") merged.goldenWater = 0;
   if (typeof merged.fertilizer !== "number") merged.fertilizer = 0;
   if (typeof merged.streak !== "number") merged.streak = 0;
+  if (typeof merged.lastRainWateredDate !== "string") merged.lastRainWateredDate = null;
+  merged.decorations = sanitizeDecorations(merged.decorations);
+  merged.compost = sanitizeCompost(merged.compost, now);
   if (merged.balanceId !== BALANCE_ID) {
     merged.plots.forEach((plot) => {
       if (!plot.crop) return;
@@ -148,6 +204,27 @@ export function applyDailyLogin(state: GameState, now = Date.now()): string[] {
   return [
     `오늘의 첫 접속 보상으로 황금 물뿌리개 1회를 받았습니다. 연속 출석 ${state.streak}일째입니다.`,
   ];
+}
+
+export function applyDailyWeatherEffects(state: GameState, now = Date.now()): string | null {
+  const weather = getWeather(now);
+  if (weather === "clear") return null;
+
+  const today = getDayKey(now);
+  if (state.lastRainWateredDate === today) return null;
+
+  let wateredCount = 0;
+  state.plots.forEach((plot) => {
+    if (!plot.crop) return;
+    const status = getCropStatus(plot, now);
+    if (status.isReady || plot.crop.watered) return;
+    plot.crop.watered = true;
+    wateredCount += 1;
+  });
+  state.lastRainWateredDate = today;
+
+  if (weather === "snow") return wateredCount > 0 ? "눈이 녹아 밭이 촉촉해졌습니다." : "눈이 내려 정원이 조용히 반짝입니다.";
+  return wateredCount > 0 ? "비가 내려 밭이 촉촉해졌습니다." : "비가 내려 정원이 촉촉해졌습니다.";
 }
 
 export function ensureDailyVisitor(state: GameState, now = Date.now()): boolean {
@@ -230,7 +307,12 @@ export function makeGatherSpots(now = Date.now()): GatherSpot[] {
 
 export function pickForageItem(now = Date.now()): string {
   const night = isNightTime(now);
-  const pool = Object.values(FORAGE_DEFS).filter((item) => !item.nightOnly || night);
+  const season = getSeason(now);
+  const pool = Object.values(FORAGE_DEFS).filter((item) => {
+    if (item.nightOnly && !night) return false;
+    if (item.season && item.season !== season) return false;
+    return true;
+  });
   const total = pool.reduce((sum, item) => sum + item.weight, 0);
   let roll = Math.random() * total;
 
@@ -239,6 +321,34 @@ export function pickForageItem(now = Date.now()): string {
     if (roll <= 0) return item.id;
   }
   return pool[0].id;
+}
+
+export function getSeason(now = Date.now()): SeasonId {
+  const month = new Date(now).getMonth() + 1;
+  if (month >= 3 && month <= 5) return "spring";
+  if (month >= 6 && month <= 8) return "summer";
+  if (month >= 9 && month <= 11) return "autumn";
+  return "winter";
+}
+
+export function getWeather(now = Date.now()): WeatherId {
+  const season = getSeason(now);
+  const roll = hashString(`${getDayKey(now)}:weather`) % 100;
+  if (roll >= 75) return season === "winter" ? "snow" : "rain";
+  return "clear";
+}
+
+export function getSeasonName(season: SeasonId): string {
+  if (season === "spring") return "봄";
+  if (season === "summer") return "여름";
+  if (season === "autumn") return "가을";
+  return "겨울";
+}
+
+export function getWeatherName(weather: WeatherId): string {
+  if (weather === "rain") return "비";
+  if (weather === "snow") return "눈";
+  return "맑음";
 }
 
 export function isNightTime(now = Date.now()): boolean {
@@ -253,6 +363,25 @@ export function addInventory(state: GameState, key: string, amount: number): voi
 export function addCodex(state: GameState, key: string, now = Date.now()): void {
   if (state.codex[key]) return;
   state.codex[key] = { firstObtainedAt: now };
+}
+
+export function isDecorationPlaced(decoration: PlacedDecoration): decoration is PlacedDecoration & { x: number; z: number } {
+  return typeof decoration.x === "number" && typeof decoration.z === "number";
+}
+
+export function getCoziness(state: GameState): number {
+  return state.decorations.reduce((sum, decoration) => {
+    if (!isDecorationPlaced(decoration)) return sum;
+    return sum + (DECOR_DEFS[decoration.type]?.cozy || 0);
+  }, 0);
+}
+
+export function getVisitorBonus(state: GameState): number {
+  return Number((1.5 + Math.min(0.3, getCoziness(state) * 0.01)).toFixed(2));
+}
+
+export function makeDecorationId(type: DecorationType, now = Date.now()): string {
+  return `decor-${type}-${now}-${Math.floor(Math.random() * 100000)}`;
 }
 
 export function getItemInfo(key: string): ItemInfo {
@@ -312,11 +441,75 @@ export function getPossibleCodexEntries(): CodexEntry[] {
     label: item.name,
   }));
 
-  return [...cropEntries, ...forageEntries];
+  const critterEntries = Object.values(CRITTER_DEFS).map((critter) => ({
+    key: makeItemKey("critter", critter.id, "normal"),
+    label: critter.name,
+  }));
+
+  return [...cropEntries, ...forageEntries, ...critterEntries];
 }
 
 export function getCodexCount(state: GameState): number {
   return getPossibleCodexEntries().filter((entry) => Boolean(state.codex[entry.key])).length;
+}
+
+export function getCompostRemainingMs(slot: CompostState["slots"][number] | null, now = Date.now()): number {
+  if (!slot) return 0;
+  return Math.max(0, slot.startedAt + COMPOST_MS - now);
+}
+
+export function getCompostReadyCount(state: GameState, now = Date.now()): number {
+  return state.compost.slots.filter((slot) => slot && getCompostRemainingMs(slot, now) <= 0).length;
+}
+
+export function hasEmptyCompostSlot(state: GameState): boolean {
+  return state.compost.slots.some((slot) => slot === null);
+}
+
+export function findWiltedInventoryKey(state: GameState): string | null {
+  const cropOrder = Object.keys(CROP_DEFS);
+  const entries = Object.entries(state.inventory).filter(([key, quantity]) => quantity > 0 && key.startsWith("crop|") && key.endsWith("|wilted"));
+  entries.sort(([left], [right]) => {
+    const leftIndex = cropOrder.indexOf(parseItemKey(left).id);
+    const rightIndex = cropOrder.indexOf(parseItemKey(right).id);
+    return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+  });
+  return entries[0]?.[0] ?? null;
+}
+
+export function getEligibleCritters(state: GameState, now = Date.now()): CritterType[] {
+  const night = isNightTime(now);
+  const weather = getWeather(now);
+  const growingCrops = state.plots.map((plot) => plot.crop).filter(Boolean) as CropState[];
+  const hasFlowerCrop = growingCrops.some((crop) => crop.type === "sunflower" || crop.type === "rainbow_flower");
+  const wateredPlots = growingCrops.filter((crop) => crop.watered).length;
+  const hasCarrot = growingCrops.some((crop) => crop.type === "carrot");
+  const cozy = getCoziness(state);
+  const eligible: CritterType[] = [];
+
+  if (!night && hasFlowerCrop) eligible.push("butterfly");
+  if (!night && wateredPlots >= 2) eligible.push("sparrow");
+  if (!night && hasCarrot) eligible.push("rabbit");
+  if (weather !== "clear") eligible.push("frog");
+  if (night && cozy >= 5) eligible.push("hedgehog");
+  if (night) eligible.push("owl");
+
+  return eligible;
+}
+
+export function pickCritterType(state: GameState, now = Date.now()): CritterType | null {
+  const eligible = getEligibleCritters(state, now);
+  if (eligible.length === 0) return null;
+  return eligible[Math.floor(Math.random() * eligible.length)];
+}
+
+export function getCritterTrace(state: GameState, offlineMs: number, now = Date.now()): string | null {
+  const traceAt = now - Math.max(0, Math.floor(offlineMs / 2));
+  const eligible = getEligibleCritters(state, traceAt);
+  if (eligible.length === 0) return null;
+  const type = eligible[hashString(`${getDayKey(traceAt)}:${offlineMs}:critter-trace`) % eligible.length];
+  const dayPart = isNightTime(traceAt) ? "밤사이" : "잠시";
+  return `${dayPart} ${CRITTER_DEFS[type].name}가 다녀간 흔적이 있어요.`;
 }
 
 export function getGatherRemainingMs(state: GameState, now = Date.now()): number {
