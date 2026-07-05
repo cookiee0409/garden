@@ -9,7 +9,6 @@ import {
   formatDuration,
   getCompostRemainingMs,
   getCropStatus,
-  getGatherRemainingMs,
   getSeason,
   getWeather,
   isDecorationPlaced,
@@ -1237,9 +1236,6 @@ function SeasonalParticles({ season, weather }: { season: SeasonId; weather: Wea
 
 function ForestWorld({ palette }: { palette: ScenePalette }) {
   const game = useGameStore((store) => store.game);
-  const now = useGameStore((store) => store.now);
-  const startGatherRound = useGameStore((store) => store.startGatherRound);
-  const allCollected = game.gather.spots.every((spot) => spot.collected);
 
   return (
     <>
@@ -1260,17 +1256,6 @@ function ForestWorld({ palette }: { palette: ScenePalette }) {
         <ForageSpot index={index} key={spot.id} />
       ))}
       <Fireflies />
-      {allCollected && (
-        <Html center position={[0, 1.55, 0]}>
-          <div className="forest-empty-card">
-            <strong>채집 완료</strong>
-            <span>예비 리필 {game.gather.charges}회 · 다음 리필 {formatDuration(getGatherRemainingMs(game, now))}</span>
-            <button className="item-button secondary" type="button" disabled={game.gather.charges <= 0} onClick={startGatherRound}>
-              새 포인트 펼치기
-            </button>
-          </div>
-        </Html>
-      )}
     </>
   );
 }
