@@ -135,20 +135,6 @@ function clampToIsland(position: Vector3) {
   position.z *= scale;
 }
 
-function resolveAabbCollision(position: Vector3, centerX: number, centerZ: number, halfX: number, halfZ: number) {
-  const dx = position.x - centerX;
-  const dz = position.z - centerZ;
-  const overlapX = halfX + PLAYER_RADIUS - Math.abs(dx);
-  const overlapZ = halfZ + PLAYER_RADIUS - Math.abs(dz);
-  if (overlapX <= 0 || overlapZ <= 0) return;
-
-  if (overlapX < overlapZ) {
-    position.x += dx >= 0 ? overlapX : -overlapX;
-  } else {
-    position.z += dz >= 0 ? overlapZ : -overlapZ;
-  }
-}
-
 function resolveCircleCollision(position: Vector3, centerX: number, centerZ: number, radius: number) {
   const dx = position.x - centerX;
   const dz = position.z - centerZ;
@@ -178,9 +164,6 @@ function resolveCollisions(position: Vector3, scene: SceneId, game: GameState) {
   clampToIsland(position);
 
   if (scene === "garden") {
-    for (const plot of PLOT_COLLIDERS) {
-      resolveAabbCollision(position, plot.x, plot.z, PLOT_HALF_SIZE, PLOT_HALF_SIZE);
-    }
     for (const tree of GARDEN_TREE_COLLIDERS) {
       resolveCircleCollision(position, tree.x, tree.z, tree.radius);
     }
@@ -651,13 +634,13 @@ function PlotTile({ index }: { index: number }) {
   return (
     <group position={[x, 0, z]}>
       <mesh
-        position={[0, 0.1, 0]}
+        position={[0, 0.03, 0]}
         onClick={(event) => {
           event.stopPropagation();
           selectPlot(index);
         }}
       >
-        <boxGeometry args={[1.1, 0.2, 1.1]} />
+        <boxGeometry args={[1.1, 0.06, 1.1]} />
         <meshStandardMaterial color={tileColor} />
       </mesh>
       {selected && (
