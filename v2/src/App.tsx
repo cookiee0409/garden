@@ -185,10 +185,11 @@ function PlotDetails() {
 
     const allCollected = game.gather.spots.every((spot) => spot.collected);
     const remaining = formatDuration(getGatherRemainingMs(game, now));
+    const waitingForRefill = allCollected && game.gather.charges <= 0;
     return (
       <div className="plot-details">
         <p className="detail-copy">
-          예비 리필 {game.gather.charges}회 · 다음 리필 {remaining}
+          {waitingForRefill ? `채집 포인트가 쉬는 중 · 다음 리필 ${remaining}` : `예비 리필 ${game.gather.charges}회 · 다음 리필 ${remaining}`}
           {isNightTime(now) ? " · 밤빛 조각 출현 중" : ""}
         </p>
         <button

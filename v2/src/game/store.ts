@@ -242,6 +242,17 @@ function makeActiveCritter(type: CritterType, game: GameState, now = Date.now())
   };
 }
 
+function canAutoStartGatherRound(game: GameState): boolean {
+  return game.gather.charges > 0 && game.gather.spots.length > 0 && game.gather.spots.every((spot) => spot.collected);
+}
+
+function autoStartGatherRound(game: GameState, now = Date.now()): boolean {
+  if (!canAutoStartGatherRound(game)) return false;
+  game.gather.charges -= 1;
+  game.gather.spots = makeGatherSpots(now);
+  return true;
+}
+
 function petForVisitor(visitorName: string): PetId | null {
   const pet = Object.values(PET_DEFS).find((item) => item.visitor === visitorName);
   return pet?.id ?? null;
@@ -354,8 +365,10 @@ export const useGameStore = create<GameStore>((set, get) => {
     if (!["garden", "forest"].includes(scene)) return;
     const current = get().game;
     if (current.scene === scene) return;
+    const now = Date.now();
     const next = structuredClone(current);
     next.scene = scene;
+    const openedGatherRound = scene === "forest" && autoStartGatherRound(next, now);
     writeSave(next);
     set((store) => ({
       game: next,
@@ -363,8 +376,9 @@ export const useGameStore = create<GameStore>((set, get) => {
       selectedForage: null,
       placementDecorationId: null,
       playerSpawn: { id: spawnForTransition(current.scene, scene), version: store.playerSpawn.version + 1 },
-      interactionCooldownUntil: Date.now() + SCENE_INTERACTION_COOLDOWN_MS,
+      interactionCooldownUntil: now + SCENE_INTERACTION_COOLDOWN_MS,
     }));
+    if (openedGatherRound) showToast("새 채집 포인트가 숲에 펼쳐졌습니다.");
   };
 
   const harvestInto = (next: GameState, index: number, now: number): { effect: HarvestEffect; message: string } | null => {
@@ -573,10 +587,16 @@ export const useGameStore = create<GameStore>((set, get) => {
     const today = getDayKey(now);
     const needsBait = current.lastBaitRefillDate !== today;
     const needsPetAssist = current.pets.some((petId) => current.petAssistDates[petId] !== today);
-    if (!needsRefill && !needsVisitor && !needsWeather && !needsBait && !needsPetAssist) return;
+    const needsGatherRound = current.scene === "forest" && canAutoStartGatherRound(current);
+    if (!needsRefill && !needsVisitor && !needsWeather && !needsBait && !needsPetAssist && !needsGatherRound) return;
 
     const next = structuredClone(current);
     let changed = applyGatherRefill(next, now);
+    const openedGatherRound = next.scene === "forest" && autoStartGatherRound(next, now);
+    if (openedGatherRound) {
+      changed = true;
+      showToast("새 채집 포인트가 숲에 펼쳐졌습니다.");
+    }
     if (ensureDailyVisitor(next, now)) changed = true;
     const baitMessage = applyDailyBaitRefill(next, now);
     if (baitMessage) {
@@ -593,7 +613,10 @@ export const useGameStore = create<GameStore>((set, get) => {
       changed = true;
       petMessages.forEach(showToast);
     }
-    if (changed) commit(next);
+    if (changed) {
+      commit(next);
+      if (openedGatherRound) set({ selectedForage: null });
+    }
   }, 1000);
 
   window.setTimeout(() => {

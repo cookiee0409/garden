@@ -9,6 +9,7 @@ import {
   formatDuration,
   getCompostRemainingMs,
   getCropStatus,
+  getGatherRemainingMs,
   getSeason,
   getWeather,
   isDecorationPlaced,
@@ -1121,6 +1122,8 @@ function ForageSpot({ index }: { index: number }) {
     group.current.rotation.y += 0.012;
   });
 
+  if (spot.collected) return null;
+
   return (
     <group
       ref={group}
@@ -1129,24 +1132,19 @@ function ForageSpot({ index }: { index: number }) {
         event.stopPropagation();
         selectForage(index);
       }}
-      scale={spot.collected ? 0.62 : 1}
     >
       <mesh position={[0, 0.02, 0]}>
         <cylinderGeometry args={[0.28, 0.34, 0.06, 12]} />
-        <meshStandardMaterial color={spot.collected ? "#8aac83" : "#c7e6a1"} transparent opacity={spot.collected ? 0.42 : 0.8} />
+        <meshStandardMaterial color="#c7e6a1" transparent opacity={0.8} />
       </mesh>
-      <ForageModel itemId={spot.item} collected={spot.collected} />
-      {!spot.collected && (
-        <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={selected || nearby ? [0.38, 0.47, 24] : [0.34, 0.4, 24]} />
-          <meshBasicMaterial color={selected || nearby ? "#f2bc46" : item.nightOnly ? "#9dd9ff" : "#fff0a8"} transparent opacity={0.86} />
-        </mesh>
-      )}
-      {!spot.collected && (
-        <Html center position={[0, 0.72, 0]} style={{ pointerEvents: "none" }}>
-          <span className="forage-tag">{item.name}</span>
-        </Html>
-      )}
+      <ForageModel itemId={spot.item} collected={false} />
+      <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={selected || nearby ? [0.38, 0.47, 24] : [0.34, 0.4, 24]} />
+        <meshBasicMaterial color={selected || nearby ? "#f2bc46" : item.nightOnly ? "#9dd9ff" : "#fff0a8"} transparent opacity={0.86} />
+      </mesh>
+      <Html center position={[0, 0.72, 0]} style={{ pointerEvents: "none" }}>
+        <span className="forage-tag">{item.name}</span>
+      </Html>
     </group>
   );
 }
@@ -1236,6 +1234,9 @@ function SeasonalParticles({ season, weather }: { season: SeasonId; weather: Wea
 
 function ForestWorld({ palette }: { palette: ScenePalette }) {
   const game = useGameStore((store) => store.game);
+  const now = useGameStore((store) => store.now);
+  const allCollected = game.gather.spots.every((spot) => spot.collected);
+  const waitingForRefill = allCollected && game.gather.charges <= 0;
 
   return (
     <>
@@ -1256,6 +1257,11 @@ function ForestWorld({ palette }: { palette: ScenePalette }) {
         <ForageSpot index={index} key={spot.id} />
       ))}
       <Fireflies />
+      {waitingForRefill && (
+        <Html center position={[0, 0.92, 1.35]} style={{ pointerEvents: "none" }}>
+          <span className="forest-rest-badge">채집 포인트 쉬는 중 · {formatDuration(getGatherRemainingMs(game, now))}</span>
+        </Html>
+      )}
     </>
   );
 }
