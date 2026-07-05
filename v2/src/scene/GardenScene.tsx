@@ -639,7 +639,7 @@ function PlotTile({ index }: { index: number }) {
   return (
     <group position={[x, 0, z]}>
       <mesh
-        position={[0, 0.03, 0]}
+        position={[0, 0.13, 0]}
         onClick={(event) => {
           event.stopPropagation();
           selectPlot(index);
