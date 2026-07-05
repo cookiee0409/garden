@@ -362,7 +362,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   };
 
   const switchSceneTo = (scene: SceneId) => {
-    if (!["garden", "forest"].includes(scene)) return;
+    if (!["garden", "forest", "pond"].includes(scene)) return;
     const current = get().game;
     if (current.scene === scene) return;
     const now = Date.now();

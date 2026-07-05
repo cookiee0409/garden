@@ -53,6 +53,9 @@ import {
   PLOT_COUNT,
   PLOT_HALF_SIZE,
   POND_ISLAND_GEOMETRY,
+  POND_WATER_COLLIDER,
+  POND_WATER_POSITION,
+  POND_WATER_RADIUS,
   PORTALS,
   SPAWN_POSITIONS,
   forestPosition,
@@ -175,6 +178,8 @@ function resolveCollisions(position: Vector3, scene: SceneId, game: GameState) {
     for (const tree of FOREST_TREE_COLLIDERS) {
       resolveCircleCollision(position, tree.x, tree.z, tree.radius);
     }
+  } else if (scene === "pond") {
+    resolveCircleCollision(position, POND_WATER_COLLIDER.x, POND_WATER_COLLIDER.z, POND_WATER_COLLIDER.radius);
   }
 
   clampToIsland(position);
@@ -1266,12 +1271,76 @@ function ForestWorld({ palette }: { palette: ScenePalette }) {
   );
 }
 
+function PondWater({ night }: { night: boolean }) {
+  const group = useRef<Group>(null);
+
+  useFrame((state) => {
+    if (!group.current) return;
+    const time = state.clock.elapsedTime;
+    group.current.scale.set(1 + Math.sin(time * 0.9) * 0.006, 1, 1 + Math.cos(time * 0.75) * 0.006);
+  });
+
+  return (
+    <group ref={group} position={POND_WATER_POSITION}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[POND_WATER_RADIUS, 72]} />
+        <meshStandardMaterial color={night ? "#6ba8cc" : "#7ed8d3"} transparent opacity={night ? 0.74 : 0.84} roughness={0.25} metalness={0.04} />
+      </mesh>
+      <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.58, 0.61, 64]} />
+        <meshBasicMaterial color={night ? "#cce7ff" : "#f3fffb"} transparent opacity={night ? 0.22 : 0.34} />
+      </mesh>
+      <mesh position={[0.72, 0.014, -0.35]} rotation={[-Math.PI / 2, 0, 0.3]}>
+        <ringGeometry args={[0.34, 0.36, 48]} />
+        <meshBasicMaterial color={night ? "#cce7ff" : "#f3fffb"} transparent opacity={night ? 0.18 : 0.28} />
+      </mesh>
+    </group>
+  );
+}
+
+function LilyPad({ position, scale = 1 }: { position: [number, number, number]; scale?: number }) {
+  return (
+    <group position={position} scale={scale}>
+      <mesh rotation={[-Math.PI / 2, 0, 0.45]}>
+        <circleGeometry args={[0.22, 24]} />
+        <meshStandardMaterial color="#5aa86c" roughness={0.7} />
+      </mesh>
+      <mesh position={[0.04, 0.025, -0.02]}>
+        <sphereGeometry args={[0.035, 8, 6]} />
+        <meshStandardMaterial color="#f4b6ca" emissive="#e987aa" emissiveIntensity={0.18} />
+      </mesh>
+    </group>
+  );
+}
+
+function BiteRipples({ active }: { active: boolean }) {
+  const ripple = useRef<Mesh>(null);
+  const material = useRef<MeshBasicMaterial>(null);
+
+  useFrame((state) => {
+    if (!active || !ripple.current || !material.current) return;
+    const progress = (state.clock.elapsedTime * 2.4) % 1;
+    ripple.current.scale.setScalar(0.65 + progress * 1.1);
+    material.current.opacity = (1 - progress) * 0.62;
+  });
+
+  if (!active) return null;
+
+  return (
+    <mesh ref={ripple} position={[0.22, 0.105, 1.04]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.18, 0.23, 36]} />
+      <meshBasicMaterial ref={material} color="#fff2a6" transparent opacity={0.6} />
+    </mesh>
+  );
+}
+
 function FishingSpot() {
   const game = useGameStore((store) => store.game);
   const fishing = useGameStore((store) => store.fishing);
   const now = useGameStore((store) => store.now);
+  const bite = fishing.phase === "bite";
   const label =
-    fishing.phase === "bite"
+    bite
       ? "입질!"
       : fishing.phase === "waiting" && fishing.biteAt
         ? formatDuration(Math.max(0, fishing.biteAt - now))
@@ -1281,26 +1350,37 @@ function FishingSpot() {
 
   return (
     <group position={FISHING_SPOT_POSITION}>
-      <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.36, 0.46, 28]} />
-        <meshBasicMaterial color={fishing.phase === "bite" ? "#f2bc46" : "#d8f2ff"} transparent opacity={0.75} />
+      <mesh position={[0, 0.085, -0.08]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.42, 0.52, 28]} />
+        <meshBasicMaterial color={bite ? "#f2bc46" : "#d8f2ff"} transparent opacity={0.72} />
       </mesh>
-      <mesh position={[0, 0.13, 0.18]} rotation={[0.45, 0, 0]}>
-        <cylinderGeometry args={[0.018, 0.024, 0.86, 6]} />
+      {[-0.36, 0, 0.36].map((x) => (
+        <mesh key={x} position={[x, 0.12, 0.1]}>
+          <boxGeometry args={[0.28, 0.12, 0.78]} />
+          <meshStandardMaterial color="#a7744e" roughness={0.68} />
+        </mesh>
+      ))}
+      <mesh position={[0, 0.19, 0.48]} rotation={[0.85, 0, -0.16]}>
+        <cylinderGeometry args={[0.018, 0.028, 1.25, 6]} />
         <meshStandardMaterial color="#7b5a43" />
       </mesh>
-      <mesh position={[0.2, 0.21, -0.24]}>
-        <sphereGeometry args={[0.055, 8, 6]} />
-        <meshStandardMaterial color={fishing.phase === "bite" ? "#ef6d79" : "#ffffff"} emissive={fishing.phase === "bite" ? "#ef6d79" : "#000000"} emissiveIntensity={0.35} />
+      <mesh position={[0.27, 0.31, 0.78]} rotation={[0.64, 0, -0.04]}>
+        <cylinderGeometry args={[0.004, 0.004, 0.82, 5]} />
+        <meshBasicMaterial color="#f7efe5" transparent opacity={0.78} />
       </mesh>
+      <mesh position={[0.22, 0.13, 1.04]}>
+        <sphereGeometry args={[0.055, 8, 6]} />
+        <meshStandardMaterial color={bite ? "#ef6d79" : "#ffffff"} emissive={bite ? "#ef6d79" : "#000000"} emissiveIntensity={0.35} />
+      </mesh>
+      <BiteRipples active={bite} />
       <Html center position={[0, 0.8, 0]} style={{ pointerEvents: "none" }}>
-        <span className={`plot-tag ${fishing.phase === "bite" ? "plot-tag--ready" : ""}`}>{label}</span>
+        <span className={`plot-tag ${bite ? "plot-tag--ready" : ""}`}>{label}</span>
       </Html>
     </group>
   );
 }
 
-function PondWorld({ palette }: { palette: ScenePalette }) {
+function PondWorld({ palette, night }: { palette: ScenePalette; night: boolean }) {
   return (
     <>
       <mesh position={[0, -0.18, 0]}>
@@ -1311,13 +1391,20 @@ function PondWorld({ palette }: { palette: ScenePalette }) {
         <cylinderGeometry args={POND_ISLAND_GEOMETRY.bottom} />
         <meshStandardMaterial color={palette.forestSide} flatShading />
       </mesh>
-      <mesh position={[0, 0.02, 1.05]} scale={[1.35, 0.12, 1]}>
-        <sphereGeometry args={[1.28, 28, 12]} />
-        <meshStandardMaterial color="#7fc8d8" transparent opacity={0.82} />
+      <mesh position={[POND_WATER_POSITION[0], 0.092, POND_WATER_POSITION[2]]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[POND_WATER_RADIUS - 0.02, POND_WATER_RADIUS + 0.28, 72]} />
+        <meshStandardMaterial color="#c79b6a" roughness={0.8} />
       </mesh>
-      <mesh position={[0, 0.09, 0.08]}>
-        <boxGeometry args={[1.5, 0.12, 0.5]} />
-        <meshStandardMaterial color="#b98258" />
+      <PondWater night={night} />
+      <LilyPad position={[-0.72, 0.105, 0.72]} scale={0.95} />
+      <LilyPad position={[0.82, 0.106, 1.42]} scale={0.78} />
+      <mesh position={[-1.58, 0.18, -0.18]} rotation={[0.18, 0, -0.18]}>
+        <cylinderGeometry args={[0.025, 0.035, 0.72, 6]} />
+        <meshStandardMaterial color="#5c8d55" />
+      </mesh>
+      <mesh position={[-1.36, 0.2, -0.02]} rotation={[0.22, 0, 0.14]}>
+        <cylinderGeometry args={[0.022, 0.032, 0.68, 6]} />
+        <meshStandardMaterial color="#6b9c5c" />
       </mesh>
       <Tree position={[-3.7, 0, 0.8]} scale={0.82} palette={palette} />
       <Tree position={[3.55, 0, -0.45]} scale={0.78} palette={palette} />
@@ -1368,7 +1455,7 @@ export function GardenScene() {
       ) : scene === "forest" ? (
         <ForestWorld palette={palette} />
       ) : (
-        <PondWorld palette={palette} />
+        <PondWorld palette={palette} night={night} />
       )}
       <PlayerController />
     </Canvas>

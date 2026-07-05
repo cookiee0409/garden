@@ -77,7 +77,10 @@ export const GARDEN_TREE_COLLIDERS = GARDEN_TREES.map((tree) => tree.collider);
 export const FOREST_TREE_COLLIDERS = FOREST_TREES.map((tree) => tree.collider);
 export const COMPOST_POSITION = [1.2, 0, 3.7] as [number, number, number];
 export const COMPOST_COLLIDER = { x: COMPOST_POSITION[0], z: COMPOST_POSITION[2], radius: 0.36 };
-export const FISHING_SPOT_POSITION = [0, 0, 1.35] as [number, number, number];
+export const POND_WATER_POSITION = [0, 0.065, 0.55] as [number, number, number];
+export const POND_WATER_RADIUS = 2.05;
+export const POND_WATER_COLLIDER = { x: POND_WATER_POSITION[0], z: POND_WATER_POSITION[2], radius: 1.74 };
+export const FISHING_SPOT_POSITION = [0, 0, -1.55] as [number, number, number];
 
 export function plotPosition(index: number): [number, number] {
   const row = Math.floor(index / 3);
