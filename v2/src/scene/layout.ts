@@ -11,7 +11,7 @@ export const PLAYER_RADIUS = 0.24;
 export const ISLAND_RADIUS = 4.3;
 export const INTERACTION_RADIUS = 0.9;
 
-export const CAMERA_OFFSET: [number, number, number] = [6.6, 7.9, 6.6];
+export const CAMERA_OFFSET: [number, number, number] = [7.6, 9.2, 7.6];
 export const INITIAL_CAMERA_POSITION: [number, number, number] = [...CAMERA_OFFSET];
 
 export const GARDEN_ISLAND_GEOMETRY = {

@@ -70,6 +70,8 @@ const GARDEN_INTERACTION_TARGETS: InteractionTarget[] = [
 
 const critterPositions = new Map<string, Vector3>();
 const petPositions = new Map<string, Vector3>();
+const CAMERA_DEAD_ZONE = 0.5;
+const CAMERA_LERP = 0.05;
 
 const PLOT_COLLIDERS = Array.from({ length: PLOT_COUNT }, (_, index) => {
   const [x, z] = plotPosition(index);
@@ -425,11 +427,15 @@ function PlayerController() {
     nearbyRef.current = prompt;
     setNearbyInteraction(prompt);
 
-    cameraLookTarget.current.set(player.current.position.x, 0.42, player.current.position.z);
-    cameraTarget.current.lerp(cameraLookTarget.current, 0.08);
+    const cameraDx = player.current.position.x - cameraTarget.current.x;
+    const cameraDz = player.current.position.z - cameraTarget.current.z;
+    if (Math.hypot(cameraDx, cameraDz) > CAMERA_DEAD_ZONE) {
+      cameraLookTarget.current.set(player.current.position.x, 0.42, player.current.position.z);
+      cameraTarget.current.lerp(cameraLookTarget.current, CAMERA_LERP);
+    }
     clampToIsland(cameraTarget.current);
     cameraPositionTarget.current.copy(cameraTarget.current).add(cameraOffset.current);
-    state.camera.position.lerp(cameraPositionTarget.current, 0.08);
+    state.camera.position.lerp(cameraPositionTarget.current, CAMERA_LERP);
     state.camera.lookAt(cameraTarget.current);
   });
 
